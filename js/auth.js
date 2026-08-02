@@ -1,0 +1,196 @@
+// Login gate, role gating, and cross-device publish/sync via Google Sheet
+const Auth = {
+    _preview: null,   // published blob fetched for the login dropdowns (not loaded into App yet)
+
+    // ---- Web-app URL: baked-in CONFIG > synced data > per-device localStorage ----
+    URL_KEY: 'detudom_shift_sheeturl',
+    bakedUrl() { return (typeof CONFIG !== 'undefined' && CONFIG.SHEET_URL) ? CONFIG.SHEET_URL.trim() : ''; },
+    getUrl() { return (App.data.sheetUrl || localStorage.getItem(this.URL_KEY) || this.bakedUrl() || '').trim(); },
+    // adopt the baked-in URL on first run so admin push/pull (which read data.sheetUrl) work too
+    initUrl() { const c = this.bakedUrl(); if (c && !App.data.sheetUrl) this.setUrl(c); },
+    validUrl(u) { return /^https:\/\/script\.google\.com\/.*\/exec$/.test((u || this.getUrl()).trim()); },
+    setUrl(u) {
+        u = (u || '').trim();
+        App.data.sheetUrl = u;
+        try { localStorage.setItem(this.URL_KEY, u); } catch (e) { /* ignore */ }
+        App.save();
+    },
+
+    // ---- apply the current role to the DOM ----
+    applyRole() {
+        document.body.classList.toggle('role-admin', App.isAdmin());
+        document.body.classList.toggle('role-staff', App.isStaff());
+        const gate = UI.el('loginGate'), bar = UI.el('userBar');
+
+        if (!App.session.role) {
+            gate.hidden = false; bar.hidden = true;
+            this.renderGate();
+            if (this.validUrl()) this.loadGatePreview();
+            return;
+        }
+        gate.hidden = true; bar.hidden = false;
+
+        if (App.isAdmin()) {
+            UI.el('userWho').textContent = '🛠️ ผู้จัดตารางเวร (Admin)';
+        } else {
+            const s = App.currentStaff(), p = s && App.getPosition(s.pos);
+            UI.el('userWho').textContent = '👤 ' + (s ? s.name : '?') + (p ? ` · ${p.name}` : '');
+            // force staff onto the schedule tab
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'schedule'));
+            document.querySelectorAll('.tab-panel').forEach(pn => pn.classList.toggle('active', pn.dataset.panel === 'schedule'));
+        }
+        UI.el('adminPublish').hidden = !App.isAdmin();
+        this.renderPublishStatus();
+    },
+
+    renderPublishStatus() {
+        const el = UI.el('publishStatus');
+        if (!el) return;
+        el.textContent = App.data.published ? `เผยแพร่แล้ว · ${App.data.publishedAt || ''}` : 'ยังไม่เผยแพร่ (ฉบับร่าง)';
+        el.className = 'publish-status' + (App.data.published ? ' ok' : '');
+    },
+
+    // ---- login gate ----
+    renderGate() { this.fillGateStaff(); },
+
+    // use published data from Sheet when available, otherwise the names typed on this device
+    gateData() {
+        return (this._preview && this._preview.positions && this._preview.positions.length) ? this._preview : App.data;
+    },
+
+    fillGateStaff() {
+        const src = this.gateData();
+        const posSel = UI.el('loginPos'), nameSel = UI.el('loginName');
+        if (!src.positions || !src.positions.length) {
+            posSel.innerHTML = '<option value="">— ยังไม่มีตำแหน่ง —</option>';
+            nameSel.innerHTML = '';
+            return;
+        }
+        posSel.innerHTML = src.positions.map(p => `<option value="${p.id}">${UI.esc(p.name)}</option>`).join('');
+        this.fillGateNames();
+    },
+
+    fillGateNames() {
+        const src = this.gateData();
+        const nameSel = UI.el('loginName');
+        const pos = UI.el('loginPos').value;
+        const staff = (src.staff || []).filter(s => s.pos === pos && !s.inactive);
+        nameSel.innerHTML = staff.length
+            ? staff.map(s => `<option value="${s.id}">${UI.esc(s.name)}</option>`).join('')
+            : '<option value="">— ไม่มีรายชื่อในตำแหน่งนี้ —</option>';
+    },
+
+    async loadGatePreview() {
+        const msg = UI.el('loginMsg');
+        if (!this.validUrl()) { msg.textContent = 'ใส่ลิงก์ Apps Script (.../exec) ก่อน'; return; }
+        msg.textContent = 'กำลังดึงรายชื่อ...';
+        try {
+            const data = await this.fetchPublished();
+            if (!data) { msg.textContent = 'ยังไม่มีตารางที่เผยแพร่ — ให้ Admin เผยแพร่ก่อน'; return; }
+            this._preview = data;
+            this.fillGateStaff();
+            msg.textContent = data.published ? 'เลือกชื่อแล้วกดเข้าสู่ระบบ' : '⏳ ตารางยังไม่เผยแพร่ (เข้าได้แต่จะยังไม่เห็นเวร)';
+        } catch (e) { msg.textContent = 'ดึงไม่สำเร็จ: ' + e.message; }
+    },
+
+    // fetch the published blob WITHOUT overwriting local App.data
+    async fetchPublished() {
+        const url = this.getUrl();
+        const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'mode=data', { method: 'GET' });
+        const json = await res.json();
+        if (!json || !json.ok || !json.data) return null;
+        return typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+    },
+
+    loginAdmin() { App.setSession('admin', null); this.afterLogin(); },
+
+    loginStaff() {
+        const id = UI.el('loginName').value;
+        if (!id) { UI.el('loginMsg').textContent = 'เลือกชื่อก่อน'; return; }
+        // adopt the published schedule only if it actually has data (don't wipe local names)
+        if (this._preview && this._preview.staff && this._preview.staff.length) App.loadFrom(this._preview);
+        App.setSession('staff', id);
+        this.afterLogin();
+    },
+
+    afterLogin() { this.applyRole(); UI.render(); },
+    logout() { App.logout(); this._preview = null; this.applyRole(); },
+
+    // ---- publish (admin): flag + push full data blob + human-readable sheets ----
+    async publish() {
+        if (!App.isAdmin()) return;
+        if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
+        App.data.published = true;
+        App.data.publishedAt = new Date().toLocaleString('th-TH');
+        App.save();
+        const st = UI.el('publishStatus');
+        st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status';
+        try {
+            const res = await fetch(this.getUrl(), {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'publish', data: App.data, sheets: UI.buildExportPayload().sheets })
+            });
+            const json = await res.json().catch(() => null);
+            if (json && json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
+            else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + ((json && json.error) || 'อ่านผลไม่ได้'); st.className = 'publish-status err'; }
+        } catch (e) { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + e.message; st.className = 'publish-status err'; }
+    },
+
+    // ---- admin auto-sync: push full data (staff/markers/holidays/schedules) on any edit ----
+    _pushTimer: null,
+    queueAdminPush() {
+        if (!App.isAdmin() || !this.validUrl()) return;
+        clearTimeout(this._pushTimer);
+        this.setSyncStatus('มีการแก้ไข — กำลังบันทึกขึ้น Sheet...', '');
+        this._pushTimer = setTimeout(() => this.pushData(), 2000);
+    },
+    async pushData() {
+        if (!this.validUrl()) return;
+        try {
+            const res = await fetch(this.getUrl(), {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'publish', data: App.data, sheets: UI.buildExportPayload().sheets })
+            });
+            const json = await res.json().catch(() => null);
+            if (json && json.ok) this.setSyncStatus(`ซิงค์ขึ้น Sheet แล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
+            else this.setSyncStatus('ซิงค์ไม่สำเร็จ — ลองกดเผยแพร่อีกครั้ง', 'err');
+        } catch (e) { this.setSyncStatus('ซิงค์ไม่สำเร็จ: ' + e.message, 'err'); }
+    },
+    setSyncStatus(msg, kind) {
+        const el = UI.el('publishStatus');
+        if (!el) return;
+        el.textContent = (App.data.published ? '' : '(ฉบับร่าง) ') + msg;
+        el.className = 'publish-status' + (kind ? ' ' + kind : '');
+    },
+
+    // ---- staff swap edit: merge only this staff's row on the server (debounced) ----
+    _swapTimer: null,
+    queueSwap(staffId) {
+        if (!App.isStaff() || staffId !== App.session.staffId || !this.validUrl()) return;
+        clearTimeout(this._swapTimer);
+        UI.setSheetStatus && UI.setSheetStatus('บันทึกการแลกเวร...', '');
+        this._swapTimer = setTimeout(() => this.pushSwap(staffId), 1500);
+    },
+    async pushSwap(staffId) {
+        if (!this.validUrl()) return;
+        const ym = App.currentKey();
+        const cells = (App.data.schedules[ym] && App.data.schedules[ym][staffId]) || {};
+        try {
+            await fetch(this.getUrl(), {
+                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'swap', ym, staffId, cells })
+            });
+        } catch (e) { /* keep local; retry on next edit */ }
+    },
+
+    // ---- refresh: pull the latest published state into App.data ----
+    async refresh() {
+        if (!this.validUrl()) { alert('ยังไม่ได้ตั้งค่าลิงก์ Google Sheet'); return; }
+        if (App.isAdmin() && !confirm('โหลดตารางที่เผยแพร่ล่าสุด? งานที่ยังไม่เผยแพร่ในเครื่องนี้จะถูกทับ')) return;
+        const data = await this.fetchPublished();
+        if (!data) { alert('ยังไม่มีตารางที่เผยแพร่'); return; }
+        App.loadFrom(data);
+        this.applyRole();
+        UI.render();
+    }
+};
