@@ -17,6 +17,13 @@ function doPost(e) {
       writeScheduleSheets_(ss, body.data);
       return json_({ ok: true });
     }
+    // บันทึกร่าง (manual): เก็บ DATA blob อย่างเดียว — ไม่สร้างชีตคน (กันเวร/pin ของกลุ่มที่ยังไม่เผยแพร่หลุด)
+    if (body.action === 'saveData') {
+      var prevS = getData_(ss) || {};
+      body.data.swapLog = prevS.swapLog || body.data.swapLog || {};
+      setData_(ss, body.data);
+      return json_({ ok: true });
+    }
     if (body.action === 'swap') {
       var data = getData_(ss) || {};
       data.schedules = data.schedules || {};
@@ -98,13 +105,46 @@ function writeScheduleSheets_(ss, data) {
   staff.forEach(function (s) { staffRows.push([s.name, s.role || '', posName[s.pos] || '']); });
   writeOneSheet_(ss, 'บุคลากร', staffRows);
 
-  writeSource_(ss, 'เผยแพร่', data.publishedSchedules || {}, positions, staff, mkText, mkWork);
-  writeSource_(ss, 'แลกเปลี่ยน', data.schedules || {}, positions, staff, mkText, mkWork);
+  // เขียนชีตอ่านง่ายเฉพาะ "กลุ่มที่เผยแพร่ในเดือนนั้น" (per-month) — เดือน/กลุ่มที่ยังไม่ปล่อย ไม่หลุด
+  var pubBy = data.publishedPos || {};
+  var pubSnap = data.publishedSchedules || {};
+  function pubPositionsFor(ym) {
+    var pp = pubBy[ym] || {};
+    if (Object.keys(pp).length) return positions.filter(function (p) { return !!pp[p.id]; });
+    var snap = pubSnap[ym];
+    if (snap && Object.keys(snap).length) return positions;   // legacy: เผยแพร่แบบเดือน (ไม่มี record รายกลุ่ม)
+    return [];
+  }
+  writeSource_(ss, 'เผยแพร่', pubSnap, staff, mkText, mkWork, pubPositionsFor);
+  writeSource_(ss, 'แลกเปลี่ยน', data.schedules || {}, staff, mkText, mkWork, pubPositionsFor);
+  clearUnpublishedSheets_(ss, data, pubPositionsFor);   // เดือน/กลุ่มที่ยกเลิก/ยังไม่เผยแพร่ → เคลียร์ชีตให้ว่าง
 }
 
-function writeSource_(ss, prefix, src, positions, staff, mkText, mkWork) {
+// เคลียร์ชีตอ่านง่ายของกลุ่มที่ไม่ได้เผยแพร่ในเดือนนั้น (เช่น กดยกเลิกเผยแพร่ / เดือนถัดไป) ให้เป็นหน้าเปล่า
+function clearUnpublishedSheets_(ss, data, pubPositionsFor) {
+  var positions = data.positions || [];
+  var months = {};
+  Object.keys(data.schedules || {}).forEach(function (k) { if (k.indexOf('::') < 0) months[k] = 1; });
+  Object.keys(data.publishedSchedules || {}).forEach(function (k) { months[k] = 1; });
+  Object.keys(months).forEach(function (ym) {
+    var pubIds = {};
+    pubPositionsFor(ym).forEach(function (p) { pubIds[p.id] = 1; });
+    positions.forEach(function (pos) {
+      if (pubIds[pos.id]) return;
+      ['เผยแพร่', 'แลกเปลี่ยน'].forEach(function (prefix) {
+        var name = (prefix + ' · ' + ym + ' ' + pos.name).replace(/[:\\/?*\[\]]/g, '-').slice(0, 95);
+        var sh = ss.getSheetByName(name);
+        if (sh) sh.clearContents();
+      });
+    });
+  });
+}
+
+function writeSource_(ss, prefix, src, staff, mkText, mkWork, pubPositionsFor) {
   Object.keys(src).sort().forEach(function (ym) {
     if (ym.indexOf('::') >= 0) return;   // draft ร่าง 2/3 (ymKey::d2) — เก็บใน DATA blob แต่ไม่สร้างชีทคน
+    var positions = pubPositionsFor(ym);   // เฉพาะกลุ่มที่เผยแพร่ในเดือนนี้
+    if (!positions.length) return;
     var parts = ym.split('-');
     var gy = parseInt(parts[0], 10) - 543, m = parseInt(parts[1], 10);
     var days = new Date(gy, m, 0).getDate();

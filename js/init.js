@@ -6,8 +6,7 @@
     UI.render();
     Auth.applyRole();
 
-    // admin: any local edit auto-syncs to the Sheet (debounced)
-    App.onChange = () => Auth.queueAdminPush();
+    // no auto-sync: local edits save to this browser only — admin pushes to the Sheet manually (💾 บันทึก / 🌐 เผยแพร่ per group)
 
     // --- Auth / role controls ---
     function submitAdminLogin() {
@@ -17,7 +16,7 @@
             if (!entered) { msg.textContent = 'ครั้งแรก: ตั้งรหัส Admin ก่อนเข้าใช้'; return; }
             inp.value = '';
             Auth.loginAdmin();
-            App.setAdminPass(entered);   // now admin → save pushes the new password to Sheet
+            App.setAdminPass(entered);   // stored locally; synced to Sheet on the next manual 💾 บันทึก / 🌐 เผยแพร่
         } else if (App.checkAdminPass(entered, stored)) {
             inp.value = '';
             Auth.loginAdmin();
@@ -31,8 +30,28 @@
     UI.el('loginPos').addEventListener('change', () => Auth.fillGateNames());
     UI.el('logoutBtn').addEventListener('click', () => Auth.logout());
     UI.el('refreshBtn').addEventListener('click', () => Auth.refresh());
-    UI.el('saveDraftBtn').addEventListener('click', () => Auth.saveDraft());
-    UI.el('publishBtn').addEventListener('click', () => Auth.publish());
+    UI.el('saveSettingsBtn').addEventListener('click', () => Auth.pushSave());
+
+    // --- Table font size (per-device, kept in localStorage — not synced) ---
+    function applyCellFont() {
+        let px = parseFloat(localStorage.getItem('ss_cellFont'));
+        if (!(px >= 6 && px <= 16)) px = 11.5;
+        document.documentElement.style.setProperty('--cell-font', px + 'px');
+        const lbl = UI.el('fontSizeLabel'); if (lbl) lbl.textContent = px + 'px';
+        UI.fitCells();
+    }
+    function bumpCellFont(delta) {
+        let px = parseFloat(localStorage.getItem('ss_cellFont'));
+        if (!(px >= 6 && px <= 16)) px = 11.5;
+        px = Math.min(16, Math.max(6, Math.round((px + delta) * 2) / 2));
+        localStorage.setItem('ss_cellFont', px);
+        applyCellFont();
+    }
+    UI.el('fontDownBtn').addEventListener('click', () => bumpCellFont(-0.5));
+    UI.el('fontUpBtn').addEventListener('click', () => bumpCellFont(0.5));
+    applyCellFont();
+    let _fitTimer;
+    window.addEventListener('resize', () => { clearTimeout(_fitTimer); _fitTimer = setTimeout(() => UI.fitCells(), 200); });
 
     // --- Change admin password ---
     UI.el('changePassBtn').addEventListener('click', () => UI.openPassModal());
@@ -146,8 +165,12 @@
             if (pos && confirm(`ล้างเวรเดือนนี้ของ "${pos.name}" ทั้งหมด? (รายชื่อยังอยู่)`)) { App.clearMonthPos(pc.dataset.pos); UI.renderScheduleTab(); }
             return;
         }
+        const psv = e.target.closest('.pos-save');
+        if (psv) { e.stopPropagation(); Auth.saveGroup(psv.dataset.pos); return; }
         const pub = e.target.closest('.pos-publish');
         if (pub) { e.stopPropagation(); Auth.publishPos(pub.dataset.pos); return; }
+        const unpub = e.target.closest('.pos-unpublish');
+        if (unpub) { e.stopPropagation(); Auth.unpublishPos(unpub.dataset.pos); return; }
         const dayHead = e.target.closest('th.day-col');
         if (dayHead && App.isAdmin()) { UI.openHolidayModal(dayHead); return; }
         const cell = e.target.closest('td.cell');
@@ -164,6 +187,7 @@
         if (del) { UI.removeFromCell(parseInt(del.dataset.idx, 10)); return; }
         if (e.target.closest('.cp-pin')) { UI.togglePin(); return; }
         if (e.target.closest('.cp-clear')) { UI.clearCell(); return; }
+        if (e.target.closest('.cp-x')) { UI.closePopover(); return; }
         if (e.target.closest('.cp-close')) { UI.closePopover(); return; }
     });
     document.addEventListener('click', () => UI.closePopover());

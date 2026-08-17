@@ -83,6 +83,7 @@ const UI = {
         }
         if (!positions.length) { c.innerHTML = ''; return; }
         c.innerHTML = positions.map(p => this.posBlock(p)).join('');
+        this.fitCells(c);
     },
 
     posBlock(pos) {
@@ -102,7 +103,9 @@ const UI = {
                         <button class="pos-print btn-secondary" data-pos="${pos.id}" type="button">🖨 พิมพ์</button>
                         <button class="pos-random btn-primary admin-only" data-pos="${pos.id}" type="button">🎲 สุ่ม</button>
                         <button class="pos-clear btn-danger admin-only" data-pos="${pos.id}" type="button">🗑 ล้าง</button>
-                        <button class="pos-publish admin-only${App.posPublished(pos.id) ? ' is-pub' : ''}" data-pos="${pos.id}" type="button" title="${App.posPublished(pos.id) ? 'เผยแพร่แล้ว ' + ((App.data.publishedPos && App.data.publishedPos[pos.id]) || '') + ' — กดเพื่อเผยแพร่ซ้ำ' : 'เผยแพร่กลุ่มนี้ให้เจ้าหน้าที่ดู'}">${App.posPublished(pos.id) ? '✓ เผยแพร่แล้ว' : '🌐 เผยแพร่'}</button>
+                        <button class="pos-save btn-secondary admin-only" data-pos="${pos.id}" type="button" title="บันทึกงานขึ้น Google Sheet (ไม่เผยแพร่ให้เจ้าหน้าที่)">💾 บันทึก</button>
+                        <button class="pos-publish admin-only${App.posPublished(pos.id) ? ' is-pub' : ''}" data-pos="${pos.id}" type="button" title="${App.posPublished(pos.id) ? 'เผยแพร่แล้ว ' + (((App.data.publishedPos && App.data.publishedPos[App.currentKey()]) || {})[pos.id] || '') + ' — กดเพื่อเผยแพร่ซ้ำ' : 'เผยแพร่กลุ่มนี้ให้เจ้าหน้าที่ดู'}">${App.posPublished(pos.id) ? '✓ เผยแพร่แล้ว' : '🌐 เผยแพร่'}</button>
+                        ${App.posPublished(pos.id) ? `<button class="pos-unpublish btn-danger admin-only" data-pos="${pos.id}" type="button" title="ยกเลิกเผยแพร่ — เจ้าหน้าที่จะไม่เห็นตารางกลุ่มนี้">↩ ยกเลิกเผยแพร่</button>` : ''}
                     </div>
                 </div>
                 <span class="table-hint no-print">คลิกช่อง = เลือกเวร (ใส่ได้ 2) · ดับเบิลคลิกชื่อ = แก้ไข${App.isAdmin() ? ' · คลิกหัววันที่ = เพิ่ม/ลบวันหยุด' : ''} · <span class="hint-wk">เสาร์-อาทิตย์</span> <span class="hint-hol">วันหยุด</span> (ชี้ดูชื่อวันหยุด)</span>
@@ -187,12 +190,27 @@ const UI = {
         // always show เวรเช้า on the left, เวรบ่าย on the right (others in the middle)
         const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
         const orderKey = id => { const m = App.getMarker(id); if (!m) return 1; const f = App.slotFlags(m, cat); return f.afternoon ? 2 : f.morning ? 0 : 1; };
-        return ids.slice().sort((a, b) => orderKey(a) - orderKey(b)).map(id => {
+        const chips = ids.slice().sort((a, b) => orderKey(a) - orderKey(b)).map(id => {
             const m = App.getMarker(id);
             if (!m) return '';
             const isDup = dup && dup.has(id);
             return `<span class="mk-chip${isDup ? ' dup' : ''}" style="background:${m.color}"${isDup ? ' title="เวรซ้ำกับคนอื่นในวันนี้"' : ''}>${this.markerInner(m)}</span>`;
         }).join('');
+        return `<span class="cell-fit">${chips}</span>`;   // wrapper ให้ auto-fit ย่อพอดีช่อง
+    },
+
+    // auto-shrink each cell's content so it never spills past the cell edge (per-cell scale — sizes may differ)
+    fitCells(scope) {
+        const root = scope || this.el('scheduleContainer');
+        if (!root) return;
+        const fits = Array.prototype.slice.call(root.querySelectorAll('.cell-fit'));
+        if (!fits.length) return;
+        fits.forEach(f => { f.style.transform = ''; });               // reset to natural size
+        const scales = fits.map(f => {                                // batch READ (single layout)
+            const avail = f.parentElement.clientWidth - 2, w = f.scrollWidth;
+            return (w > avail && avail > 0) ? Math.max(0.4, avail / w) : 1;
+        });
+        fits.forEach((f, i) => { if (scales[i] < 1) f.style.transform = `scale(${scales[i].toFixed(3)})`; });   // batch WRITE
     },
 
     buildFoot(posId, year, month, days) {
@@ -246,6 +264,7 @@ const UI = {
         const staff = App.data.staff.find(s => s.id === staffId);
         if (!staff || staff.inactive) return;
         if (App.isStaff() && staff.id !== App.session.staffId) return;   // staff edits own row only
+        if (App.isStaff() && !App.posPublished(staff.pos)) return;       // เดือน/กลุ่มที่ยังไม่เผยแพร่ — แก้/แลกไม่ได้
         this.editing = { staffId, day, posId: staff.pos, cell: td };
         this.renderPopover();
 
@@ -288,7 +307,7 @@ const UI = {
         }).join('');
 
         this.el('cellPopover').innerHTML = `
-            <div class="cp-head">${this.esc(staff ? staff.name : '')} · วันที่ ${day}${full ? ' <span class="cp-full">(ครบ 2 แล้ว)</span>' : ''}</div>
+            <div class="cp-head"><span class="cp-title">${this.esc(staff ? staff.name : '')} · วันที่ ${day}${full ? ' <span class="cp-full">(ครบ 2 แล้ว)</span>' : ''}</span><button class="cp-x" type="button" title="ปิด">×</button></div>
             <div class="cp-current">${current}</div>
             <div class="cp-pick-wrap">${picks || '<span class="muted-note">ไม่มีเครื่องหมาย</span>'}</div>
             <div class="cp-foot">
@@ -360,6 +379,7 @@ const UI = {
         const cov = table.querySelector(`.cov[data-day="${day}"]`);
         if (cov) cov.textContent = Schedule.dayShiftsPos(posId, day) || '';
         this.setReqCell(table, posId, day);
+        this.fitCells(table);
     },
 
     // update one staff's total, then repaint the whole day column

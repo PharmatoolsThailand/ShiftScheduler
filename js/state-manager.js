@@ -355,12 +355,15 @@ const App = {
         this.data.activeDraft = {};
     },
 
-    // ---- per-position publish (แต่ละกลุ่มปล่อยเอง) --------------------------------
-    posPublished(posId) {
-        const pp = this.data.publishedPos;
+    // ---- per-position + per-MONTH publish (แต่ละกลุ่ม/แต่ละเดือนปล่อยเอง) --------------------------------
+    // เดือนที่ยังไม่เผยแพร่ → เจ้าหน้าที่ไม่เห็น/แก้ไม่ได้ (กันเผลอกดล็อกเวรเดือนถัดไป)
+    posPublished(posId, ymKey) {
+        ymKey = ymKey || this.currentKey();
+        const pp = this.data.publishedPos && this.data.publishedPos[ymKey];
         if (pp && pp[posId]) return true;
-        // legacy: month-level เผยแพร่ ที่ยังไม่มี record รายกลุ่ม → ถือว่าเผยแพร่ทุกกลุ่ม (กันตารางเดิมหาย)
-        if (this.data.published && (!pp || !Object.keys(pp).length)) return true;
+        // legacy per-month: เดือนนี้มี snapshot เผยแพร่ แต่ไม่มี record รายกลุ่ม → ถือว่าเผยแพร่ทุกกลุ่ม (กันตารางเดิมหาย)
+        const snap = this.data.publishedSchedules && this.data.publishedSchedules[ymKey];
+        if ((!pp || !Object.keys(pp).length) && snap && Object.keys(snap).length) return true;
         return false;
     },
 
@@ -388,10 +391,29 @@ const App = {
 
     markPosPublished(posId) {
         if (!this.data.publishedPos || typeof this.data.publishedPos !== 'object') this.data.publishedPos = {};
+        const ymKey = this.currentKey();
+        const mm = this.data.publishedPos[ymKey] || (this.data.publishedPos[ymKey] = {});
         const now = new Date().toLocaleString('th-TH');
-        this.data.publishedPos[posId] = now;
+        mm[posId] = now;
         this.data.published = true;   // legacy month-level flag (any group published → login shows released)
         this.data.publishedAt = now;
+    },
+
+    // ยกเลิกเผยแพร่กลุ่มนี้ (เดือนปัจจุบัน) — เจ้าหน้าที่จะไม่เห็นตารางกลุ่มนี้ (จอเปล่า)
+    unmarkPosPublished(posId) {
+        if (!this.data.publishedPos || typeof this.data.publishedPos !== 'object') this.data.publishedPos = {};
+        const ymKey = this.currentKey();
+        const mm = this.data.publishedPos[ymKey] || (this.data.publishedPos[ymKey] = {});
+        const snap = this.data.publishedSchedules && this.data.publishedSchedules[ymKey];
+        if (!Object.keys(mm).length && snap && Object.keys(snap).length) {
+            // legacy: เผยแพร่แบบเดือน (เห็นทุกกลุ่ม) → บันทึกกลุ่มอื่นเป็น "เผยแพร่แล้ว" ก่อน แล้วค่อยเอากลุ่มนี้ออก
+            const now = new Date().toLocaleString('th-TH');
+            this.data.positions.forEach(p => { if (p.id !== posId) mm[p.id] = now; });
+        } else {
+            delete mm[posId];
+        }
+        if (!Object.keys(mm).length) delete this.data.publishedPos[ymKey];
+        this.data.published = Object.values(this.data.publishedPos).some(m => m && Object.keys(m).length > 0);
     },
 
     // freeze a month's schedule as "published by admin" (snapshot ≠ the swap-editable live schedule) — publishes the ACTIVE draft
@@ -770,6 +792,13 @@ const App = {
         if (!this.data.workplaces) this.seedWorkplaces();
         this.data.workplaces.forEach(w => { if (!w.noNightDows) w.noNightDows = []; if (!w.noNightPos) w.noNightPos = []; });
         if (!this.data.markers || !this.data.markers.length) this.seedMarkers();
+
+        // migrate publishedPos: global { posId: ts } → per-month { ymKey: { posId: ts } }
+        if (!this.data.publishedPos || typeof this.data.publishedPos !== 'object') this.data.publishedPos = {};
+        else {
+            const vals = Object.values(this.data.publishedPos);
+            if (vals.length && vals.every(v => typeof v === 'string')) this.data.publishedPos = { [this.currentKey()]: this.data.publishedPos };
+        }
 
         // migrate records saved before the position dimension existed
         const fb = this.firstPosId();

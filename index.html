@@ -17,8 +17,7 @@
         <span id="userWho" class="user-who"></span>
         <div class="user-bar-actions">
             <div id="adminPublish" class="admin-publish" hidden>
-                <button id="saveDraftBtn" class="btn-secondary" type="button">💾 บันทึกร่าง</button>
-                <button id="publishBtn" class="btn-primary" type="button">🌐 เผยแพร่ตาราง</button>
+                <button id="saveSettingsBtn" class="btn-secondary" type="button" title="บันทึกบุคลากร / ตั้งค่าเวร / วันลา ขึ้น Google Sheet (ไม่เผยแพร่)">💾 บันทึกการตั้งค่า</button>
                 <span id="publishStatus" class="publish-status"></span>
             </div>
             <button id="changePassBtn" class="btn-secondary" type="button" hidden>🔑 เปลี่ยนรหัส</button>
@@ -40,12 +39,12 @@
                         <button id="nextMonthBtn" class="month-arrow" type="button" title="เดือนถัดไป">▶</button>
                     </div>
                 </div>
-                <div class="ctrl-group draft-picker admin-only">
-                    <label title="สุ่มเปรียบเทียบ 3 ร่าง — วันลา+เวรที่ pin ใช้ร่วมทุกร่าง เผยแพร่ร่างที่เลือก">ร่างสุ่ม</label>
-                    <div class="draft-tabs" id="draftTabs">
-                        <button class="draft-tab" data-draft="1" type="button">ร่าง 1</button>
-                        <button class="draft-tab" data-draft="2" type="button">ร่าง 2</button>
-                        <button class="draft-tab" data-draft="3" type="button">ร่าง 3</button>
+                <div class="ctrl-group font-ctrl no-print">
+                    <label title="ปรับให้ตัวหนังสือในช่องเวรพอดีกรอบ — จำเฉพาะเครื่องนี้">ขนาดอักษรตาราง</label>
+                    <div class="font-nav">
+                        <button id="fontDownBtn" class="font-btn" type="button" title="เล็กลง">A−</button>
+                        <span id="fontSizeLabel" class="font-size-lbl"></span>
+                        <button id="fontUpBtn" class="font-btn" type="button" title="ใหญ่ขึ้น">A+</button>
                     </div>
                 </div>
             </div>

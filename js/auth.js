@@ -178,36 +178,36 @@ const Auth = {
         const p = App.getPosition(posId);
         if (p && confirm(`เผยแพร่กลุ่ม "${p.name}" ให้เจ้าหน้าที่ดู?\n(ร่างที่เลือกอยู่ของกลุ่มนี้กลายเป็นตารางจริง · ร่างอื่นของกลุ่มถูกล้าง)`)) this._releasePositions([posId]);
     },
-    publish() {   // publish ALL groups at once (global button)
-        if (confirm('เผยแพร่ "ทุกกลุ่ม" เดือนนี้ให้เจ้าหน้าที่ดู?\n(แต่ละกลุ่มใช้ร่างที่เลือกอยู่เป็นตารางจริง · ร่างอื่นถูกล้าง)')) this._releasePositions(App.allPosIds());
+    async unpublishPos(posId) {
+        if (!App.isAdmin()) return;
+        if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
+        const p = App.getPosition(posId);
+        if (!p || !confirm(`ยกเลิกการเผยแพร่กลุ่ม "${p.name}"?\nเจ้าหน้าที่จะไม่เห็นตารางกลุ่มนี้ (จอเปล่า) — ข้อมูลเวรยังอยู่ กดเผยแพร่ใหม่ได้`)) return;
+        App.unmarkPosPublished(posId);
+        App.save();
+        UI.render();
+        const st = UI.el('publishStatus');
+        if (st) { st.textContent = 'กำลังยกเลิกเผยแพร่...'; st.className = 'publish-status'; }
+        const json = await this.postJson({ action: 'publish', data: App.data });   // regen readable sheets (กลุ่มนี้ถูกเคลียร์)
+        if (json.ok) this.setSyncStatus(`ยกเลิกเผยแพร่ "${p.name}" แล้ว ✓`, 'ok');
+        else this.setSyncStatus('ไม่สำเร็จ: ' + json.error, 'err');
+        this.renderPublishStatus();
     },
 
-    // ---- save draft (admin): push data now WITHOUT publishing (staff still see "not released") ----
-    async saveDraft() {
+    // ---- manual save (admin): back up ALL working data (staff/ตั้งค่า/วันลา/ตาราง) to the Sheet
+    //      WITHOUT publishing — action 'saveData' writes only the DATA blob, no readable sheets → nothing leaks ----
+    async pushSave() {
         if (!App.isAdmin()) return;
-        if (!this.validUrl()) { alert('ยังไม่ได้ตั้งค่าลิงก์ Google Sheet'); return; }
-        clearTimeout(this._pushTimer);   // this manual save replaces the pending auto-sync
+        if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
+        App.save();
         const st = UI.el('publishStatus');
-        if (st) { st.textContent = 'กำลังบันทึก...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'publish', data: App.data });
-        if (json.ok) this.setSyncStatus(`บันทึกร่างแล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
+        if (st) { st.textContent = '💾 กำลังบันทึก...'; st.className = 'publish-status'; }
+        const json = await this.postJson({ action: 'saveData', data: App.data });
+        if (json.ok) this.setSyncStatus(`บันทึกแล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
         else this.setSyncStatus('บันทึกไม่สำเร็จ: ' + json.error, 'err');
     },
+    saveGroup() { return this.pushSave(); },   // per-position 💾 saves the whole working blob (atomic)
 
-    // ---- admin auto-sync: push full data (staff/markers/holidays/schedules) on any edit ----
-    _pushTimer: null,
-    queueAdminPush() {
-        if (!App.isAdmin() || !this.validUrl()) return;
-        clearTimeout(this._pushTimer);
-        this.setSyncStatus('มีการแก้ไข — กำลังบันทึกขึ้น Sheet...', '');
-        this._pushTimer = setTimeout(() => this.pushData(), 2000);
-    },
-    async pushData() {
-        if (!this.validUrl()) return;
-        const json = await this.postJson({ action: 'publish', data: App.data });
-        if (json.ok) this.setSyncStatus(`ซิงค์ขึ้น Sheet แล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
-        else this.setSyncStatus('ซิงค์ไม่สำเร็จ (ลองใหม่อัตโนมัติแล้ว) — กด 💾 บันทึกร่าง อีกครั้ง', 'err');
-    },
     setSyncStatus(msg, kind) {
         const el = UI.el('publishStatus');
         if (!el) return;
