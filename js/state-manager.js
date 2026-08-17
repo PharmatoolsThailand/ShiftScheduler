@@ -24,7 +24,8 @@ const App = {
         publishedSchedules: {}, // { 'YYYY-MM': snapshot } — admin's released schedule (frozen at publish, ignores staff swaps) for month-to-month rotation
         swapLog: {},            // { 'YYYY-MM': [{ day, staffId, byName, before:[ids], after:[ids], at }] } — staff shift-swap history (appended by backend)
         locks: {},              // { 'YYYY-MM': { staffId: [dayNumbers] } } — cells set manually by admin → preserved (not re-randomized), shared across drafts
-        activeDraft: 1          // 1|2|3 — which random draft is being viewed/edited (วันลา+pin ใช้ร่วมทุกร่าง, สุ่มแยกร่าง)
+        activeDraft: {},        // { posId: 1|2|3 } — draft ร่างสุ่มที่แต่ละตำแหน่งเลือกดู/แก้ (วันลา+pin ใช้ร่วมทุกร่าง)
+        publishedPos: {}        // { posId: 'timestamp' } — เผยแพร่แยกต่อกลุ่ม/ตำแหน่ง (เจ้าหน้าที่เห็นเฉพาะกลุ่มที่เผยแพร่)
     },
 
     // ---- session (role login, not synced) ----
@@ -297,16 +298,24 @@ const App = {
         return this.ymKey(this.data.year, this.data.month);
     },
 
-    // ---- draft comparison: ร่าง 1/2/3 per month ------------------------------
-    // base store (ymKey) = ร่าง 1 + pin ทั้งหมด (แหล่งจริง) · ร่าง 2/3 (ymKey::d2/d3) = เฉพาะเวรสุ่ม
-    // อ่าน: pin/pickOwn → base เสมอ (ใช้ร่วมทุกร่าง) · เวรสุ่ม → store ของร่างที่ดูอยู่
-    activeDraftNum() { return this.data.activeDraft || 1; },
-    draftKey(ymKey) { const n = this.activeDraftNum(); return n === 1 ? ymKey : ymKey + '::d' + n; },
-    setActiveDraft(n) {
+    // ---- draft comparison: ร่าง 1/2/3 PER POSITION ------------------------------
+    // base store (ymKey) = ร่าง 1 ของทุกตำแหน่ง + pin ทั้งหมด (แหล่งจริง) · ร่าง 2/3 (ymKey::d2/d3) = เวรสุ่มของตำแหน่งที่เลือกร่างนั้น
+    // activeDraft = { posId: n } — แต่ละตำแหน่งเลือกร่างของตัวเองอิสระ · เซลล์ของ staff อ่านจาก store ตามร่างของ "ตำแหน่ง" ตัวเอง
+    draftMap() { const a = this.data.activeDraft; return (a && typeof a === 'object') ? a : {}; },
+    activeDraftNum(posId) { return this.draftMap()[posId] || 1; },
+    anyDraftActive() { return Object.values(this.draftMap()).some(n => n > 1); },
+    draftKeyFor(ymKey, posId) { const n = this.activeDraftNum(posId); return n === 1 ? ymKey : ymKey + '::d' + n; },
+    setActiveDraft(posId, n) {
         n = Math.max(1, Math.min(3, n | 0));
-        this.data.activeDraft = n;
-        if (n > 1) { const k = this.draftKey(this.currentKey()); if (!this.data.schedules[k]) this.data.schedules[k] = {}; }
+        if (!this.data.activeDraft || typeof this.data.activeDraft !== 'object') this.data.activeDraft = {};
+        this.data.activeDraft[posId] = n;
+        if (n > 1) { const k = this.currentKey() + '::d' + n; if (!this.data.schedules[k]) this.data.schedules[k] = {}; }
         this.save();
+    },
+    // draft store a given staff's random cells live in (resolved from their position's active draft)
+    staffDraftKey(ymKey, staffId) {
+        const s = this.data.staff.find(x => x.id === staffId);
+        return this.draftKeyFor(ymKey, s ? s.pos : null);
     },
     // shifts that are shared across every draft (pin หรือ เจ้าหน้าที่เลือกเวรเอง) → อ่านจาก base
     sharedCell(ymKey, staffId, day) {
@@ -321,29 +330,68 @@ const App = {
         return this.ymKey(y, m);
     },
 
-    // merged board for the ACTIVE draft: draft's random cells + shared pin/pickOwn cells from base
+    // merged board: each staff's cells read from THEIR position's active draft (+ shared pin/pickOwn from base)
     effectiveBoard(ymKey) {
         const base = this.data.schedules[ymKey] || {};
-        if (this.activeDraftNum() === 1) return JSON.parse(JSON.stringify(base));
-        const board = JSON.parse(JSON.stringify(this.data.schedules[this.draftKey(ymKey)] || {}));
-        const put = (sid, day) => {
-            const v = base[sid] && base[sid][day];
-            if (v == null) return;
-            (board[sid] = board[sid] || {})[day] = Array.isArray(v) ? v.slice() : [v];
-        };
-        const locks = (this.data.locks && this.data.locks[ymKey]) || {};
-        Object.keys(locks).forEach(sid => (locks[sid] || []).forEach(d => put(sid, d)));
-        this.data.staff.filter(s => s.pickOwn).forEach(s => { const days = base[s.id]; if (days) Object.keys(days).forEach(d => put(s.id, +d)); });
+        if (!this.anyDraftActive()) return JSON.parse(JSON.stringify(base));
+        const [y, m] = ymKey.split('-').map(Number);
+        const days = Schedule.daysInMonth(y, m);
+        const board = {};
+        this.data.staff.forEach(s => {
+            for (let d = 1; d <= days; d++) {
+                const c = this.getCellIn(ymKey, s.id, d);
+                if (c.length) (board[s.id] = board[s.id] || {})[d] = c;
+            }
+        });
         return board;
     },
 
-    // promote the ACTIVE draft to the live/base board (ร่างที่เลือก = ตารางจริง) — scratch drafts consumed, back to ร่าง 1
+    // promote every position's active draft to the live/base board (ร่างที่เลือก = ตารางจริง) — scratch drafts consumed, back to ร่าง 1
     promoteActiveDraft(ymKey) {
         const board = this.effectiveBoard(ymKey);
         this.data.schedules[ymKey] = board;
         delete this.data.schedules[ymKey + '::d2'];
         delete this.data.schedules[ymKey + '::d3'];
-        this.data.activeDraft = 1;
+        this.data.activeDraft = {};
+    },
+
+    // ---- per-position publish (แต่ละกลุ่มปล่อยเอง) --------------------------------
+    posPublished(posId) {
+        const pp = this.data.publishedPos;
+        if (pp && pp[posId]) return true;
+        // legacy: month-level เผยแพร่ ที่ยังไม่มี record รายกลุ่ม → ถือว่าเผยแพร่ทุกกลุ่ม (กันตารางเดิมหาย)
+        if (this.data.published && (!pp || !Object.keys(pp).length)) return true;
+        return false;
+    },
+
+    // promote ONE position's active draft into the live/base board, then reset that position to ร่าง 1
+    promoteActiveDraftPos(ymKey, posId) {
+        const [y, m] = ymKey.split('-').map(Number);
+        const days = Schedule.daysInMonth(y, m);
+        const base = this.data.schedules[ymKey] || (this.data.schedules[ymKey] = {});
+        this.data.staff.filter(s => s.pos === posId).forEach(s => {
+            const cells = {};
+            for (let d = 1; d <= days; d++) { const c = this.getCellIn(ymKey, s.id, d); if (c.length) cells[d] = c; }  // effective (pins+draft)
+            base[s.id] = cells;
+            ['::d2', '::d3'].forEach(sfx => { const st = this.data.schedules[ymKey + sfx]; if (st) delete st[s.id]; });
+        });
+        if (this.data.activeDraft && typeof this.data.activeDraft === 'object') this.data.activeDraft[posId] = 1;
+    },
+
+    // freeze ONE position's staff into the published snapshot (merge — other positions kept) for month-to-month rotation
+    snapshotPublishedPos(ymKey, posId) {
+        if (!this.data.publishedSchedules) this.data.publishedSchedules = {};
+        const snap = this.data.publishedSchedules[ymKey] || (this.data.publishedSchedules[ymKey] = {});
+        const base = this.data.schedules[ymKey] || {};
+        this.data.staff.filter(s => s.pos === posId).forEach(s => { snap[s.id] = JSON.parse(JSON.stringify(base[s.id] || {})); });
+    },
+
+    markPosPublished(posId) {
+        if (!this.data.publishedPos || typeof this.data.publishedPos !== 'object') this.data.publishedPos = {};
+        const now = new Date().toLocaleString('th-TH');
+        this.data.publishedPos[posId] = now;
+        this.data.published = true;   // legacy month-level flag (any group published → login shows released)
+        this.data.publishedAt = now;
     },
 
     // freeze a month's schedule as "published by admin" (snapshot ≠ the swap-editable live schedule) — publishes the ACTIVE draft
@@ -382,10 +430,10 @@ const App = {
         else this.setCellIn(key, staffId, day, ids);
     },
 
-    // read a cell (overlay): shared pin/pickOwn from base, otherwise the active draft's random store
+    // read a cell (overlay): shared pin/pickOwn from base, otherwise this staff's-position active draft store
     getCellIn(ymKey, staffId, day) {
-        // fast path: ร่าง 1 → base store only (no overlay work — this is the hot path during สุ่ม)
-        const store = (this.activeDraftNum() === 1 || this.sharedCell(ymKey, staffId, day)) ? ymKey : this.draftKey(ymKey);
+        let store = ymKey;   // fast path: no draft active anywhere → base only (hot path during สุ่ม)
+        if (this.anyDraftActive() && !this.sharedCell(ymKey, staffId, day)) store = this.staffDraftKey(ymKey, staffId);
         const m = this.data.schedules[store];
         const v = m && m[staffId] && m[staffId][day];
         if (Array.isArray(v)) return v.slice();
@@ -402,9 +450,9 @@ const App = {
         this.save();
     },
 
-    // RANDOMIZER write → the ACTIVE draft's store (ร่าง 2/3 แยกกัน · ร่าง 1 = base)
+    // RANDOMIZER / draft write → the store of THIS staff's-position active draft (ร่าง 2/3 แยกกัน · ร่าง 1 = base)
     setCellIn(ymKey, staffId, day, ids) {
-        const store = this.draftKey(ymKey);
+        const store = this.staffDraftKey(ymKey, staffId);
         if (!this.data.schedules[store]) this.data.schedules[store] = {};
         const m = this.data.schedules[store];
         if (!m[staffId]) m[staffId] = {};
@@ -644,7 +692,6 @@ const App = {
     clearCrossMonthX(staffIds) {
         const prev = Schedule.shiftDate(this.data.year, this.data.month, 1, -1);
         const prevKey = this.ymKey(prev.year, prev.month);
-        if (!this.data.schedules[this.draftKey(prevKey)]) return;
         const xM = this.data.markers.find(m => (m.text || '').trim().toLowerCase() === 'x');
         if (!xM) return;
         staffIds.forEach(id => {
@@ -654,13 +701,12 @@ const App = {
         });
     },
 
-    // clear the ACTIVE draft's random cells for these staff, KEEPING shared pin/pickOwn cells
+    // clear the active-draft random cells for these staff (each in their position's draft store), KEEPING shared pin/pickOwn
     clearActiveDraftCells(ids) {
         const key = this.currentKey();
-        const store = this.data.schedules[this.draftKey(key)];
-        if (!store) return;
         ids.forEach(id => {
-            if (!store[id]) return;
+            const store = this.data.schedules[this.staffDraftKey(key, id)];
+            if (!store || !store[id]) return;
             Object.keys(store[id]).forEach(dStr => { if (!this.sharedCell(key, id, +dStr)) delete store[id][+dStr]; });
             if (!Object.keys(store[id]).length) delete store[id];
         });

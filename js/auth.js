@@ -71,8 +71,10 @@ const Auth = {
     renderPublishStatus() {
         const el = UI.el('publishStatus');
         if (!el) return;
-        el.textContent = App.data.published ? `เผยแพร่แล้ว · ${App.data.publishedAt || ''}` : 'ยังไม่เผยแพร่ (ฉบับร่าง)';
-        el.className = 'publish-status' + (App.data.published ? ' ok' : '');
+        const total = App.data.positions.length;
+        const pub = App.data.positions.filter(p => App.posPublished(p.id)).length;
+        if (!pub) { el.textContent = 'ยังไม่เผยแพร่ (ฉบับร่าง)'; el.className = 'publish-status'; }
+        else { el.textContent = `เผยแพร่แล้ว ${pub}/${total} กลุ่ม · ${App.data.publishedAt || ''}`; el.className = 'publish-status' + (pub === total ? ' ok' : ''); }
     },
 
     // ---- login gate ----
@@ -155,22 +157,29 @@ const Auth = {
     afterLogin() { this.applyRole(); UI.render(); },
     logout() { App.logout(); this._preview = null; this.applyRole(); },
 
-    // ---- publish (admin): flag + push full data blob + human-readable sheets ----
-    async publish() {
+    // ---- publish (admin): per-position or all — promote each group's draft, snapshot, push full blob ----
+    async _releasePositions(posIds) {
         if (!App.isAdmin()) return;
         if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
-        if (!confirm(`เผยแพร่ "ร่างที่ ${App.activeDraftNum()}" ให้เจ้าหน้าที่ดู?\n(ร่างที่เลือกจะกลายเป็นตารางจริง ร่างอื่นถูกล้าง)`)) return;
-        App.promoteActiveDraft(App.currentKey());   // ร่างที่เลือก → ตารางจริง
-        App.data.published = true;
-        App.data.publishedAt = new Date().toLocaleString('th-TH');
-        App.snapshotPublished(App.currentKey());
+        const ym = App.currentKey();
+        posIds.forEach(pid => { App.promoteActiveDraftPos(ym, pid); App.snapshotPublishedPos(ym, pid); App.markPosPublished(pid); });
         App.save();
         UI.render();
         const st = UI.el('publishStatus');
-        st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status';
+        if (st) { st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status'; }
         const json = await this.postJson({ action: 'publish', data: App.data });
-        if (json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
-        else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + json.error; st.className = 'publish-status err'; }
+        if (st) {
+            if (json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
+            else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + json.error; st.className = 'publish-status err'; }
+        }
+        this.renderPublishStatus();
+    },
+    publishPos(posId) {
+        const p = App.getPosition(posId);
+        if (p && confirm(`เผยแพร่กลุ่ม "${p.name}" ให้เจ้าหน้าที่ดู?\n(ร่างที่เลือกอยู่ของกลุ่มนี้กลายเป็นตารางจริง · ร่างอื่นของกลุ่มถูกล้าง)`)) this._releasePositions([posId]);
+    },
+    publish() {   // publish ALL groups at once (global button)
+        if (confirm('เผยแพร่ "ทุกกลุ่ม" เดือนนี้ให้เจ้าหน้าที่ดู?\n(แต่ละกลุ่มใช้ร่างที่เลือกอยู่เป็นตารางจริง · ร่างอื่นถูกล้าง)')) this._releasePositions(App.allPosIds());
     },
 
     // ---- save draft (admin): push data now WITHOUT publishing (staff still see "not released") ----

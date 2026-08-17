@@ -22,15 +22,6 @@ const UI = {
             .map((n, i) => `<option value="${i + 1}">${n}</option>`).join('');
         monthSel.value = App.data.month;
         this.el('yearInput').value = App.data.year;
-        this.renderDraftTabs();
-    },
-
-    renderDraftTabs() {
-        const wrap = this.el('draftTabs');
-        if (!wrap) return;
-        const active = App.activeDraftNum();
-        wrap.querySelectorAll('.draft-tab').forEach(b =>
-            b.classList.toggle('active', parseInt(b.dataset.draft, 10) === active));
     },
 
     setSheetStatus(msg, kind) {
@@ -82,12 +73,16 @@ const UI = {
     // ---- Schedule tab: one block per position -------------------------
     renderScheduleTab() {
         const c = this.el('scheduleContainer');
-        if (App.isStaff() && !App.data.published) {
-            c.innerHTML = '<div class="content-box empty-hint">⏳ ตารางเวรยังไม่เผยแพร่ — รอผู้จัดตารางเผยแพร่ก่อน แล้วกด “⟳ ดึงล่าสุด”</div>';
-            return;
+        let positions = App.data.positions;
+        if (App.isStaff()) {   // staff see only groups that have been published
+            positions = positions.filter(p => App.posPublished(p.id));
+            if (!positions.length) {
+                c.innerHTML = '<div class="content-box empty-hint">⏳ ตารางเวรยังไม่เผยแพร่ — รอผู้จัดตารางเผยแพร่ก่อน แล้วกด “⟳ ดึงล่าสุด”</div>';
+                return;
+            }
         }
-        if (!App.data.positions.length) { c.innerHTML = ''; return; }
-        c.innerHTML = App.data.positions.map(p => this.posBlock(p)).join('');
+        if (!positions.length) { c.innerHTML = ''; return; }
+        c.innerHTML = positions.map(p => this.posBlock(p)).join('');
     },
 
     posBlock(pos) {
@@ -101,9 +96,13 @@ const UI = {
                 <div class="pos-head">
                     <h2>${this.esc(pos.name)} <span class="pos-sub">${this.monthTitle()}</span></h2>
                     <div class="pos-actions no-print">
+                        <div class="draft-tabs admin-only" title="สุ่มเปรียบเทียบ 3 ร่างของตำแหน่งนี้ (วันลา+เวรที่ปักหมุด ใช้ร่วมทุกร่าง)">
+                            ${[1, 2, 3].map(n => `<button class="draft-tab${App.activeDraftNum(pos.id) === n ? ' active' : ''}" data-pos="${pos.id}" data-draft="${n}" type="button">ร่าง ${n}</button>`).join('')}
+                        </div>
                         <button class="pos-print btn-secondary" data-pos="${pos.id}" type="button">🖨 พิมพ์</button>
                         <button class="pos-random btn-primary admin-only" data-pos="${pos.id}" type="button">🎲 สุ่ม</button>
                         <button class="pos-clear btn-danger admin-only" data-pos="${pos.id}" type="button">🗑 ล้าง</button>
+                        <button class="pos-publish admin-only${App.posPublished(pos.id) ? ' is-pub' : ''}" data-pos="${pos.id}" type="button" title="${App.posPublished(pos.id) ? 'เผยแพร่แล้ว ' + ((App.data.publishedPos && App.data.publishedPos[pos.id]) || '') + ' — กดเพื่อเผยแพร่ซ้ำ' : 'เผยแพร่กลุ่มนี้ให้เจ้าหน้าที่ดู'}">${App.posPublished(pos.id) ? '✓ เผยแพร่แล้ว' : '🌐 เผยแพร่'}</button>
                     </div>
                 </div>
                 <span class="table-hint no-print">คลิกช่อง = เลือกเวร (ใส่ได้ 2) · ดับเบิลคลิกชื่อ = แก้ไข${App.isAdmin() ? ' · คลิกหัววันที่ = เพิ่ม/ลบวันหยุด' : ''} · <span class="hint-wk">เสาร์-อาทิตย์</span> <span class="hint-hol">วันหยุด</span> (ชี้ดูชื่อวันหยุด)</span>

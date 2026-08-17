@@ -52,7 +52,7 @@
     });
 
     // --- General controls ---
-    function applyMonth() { App.data.activeDraft = 1; App.save(); UI.render(); }
+    function applyMonth() { App.data.activeDraft = {}; App.save(); UI.render(); }
     UI.el('monthSelect').addEventListener('change', e => { App.data.month = parseInt(e.target.value, 10); applyMonth(); });
     UI.el('yearInput').addEventListener('change', e => {
         const y = parseInt(e.target.value, 10);
@@ -65,13 +65,6 @@
     }
     UI.el('prevMonthBtn').addEventListener('click', () => shiftMonth(-1));
     UI.el('nextMonthBtn').addEventListener('click', () => shiftMonth(1));
-    UI.el('draftTabs').addEventListener('click', e => {
-        const t = e.target.closest('.draft-tab');
-        if (!t) return;
-        App.setActiveDraft(parseInt(t.dataset.draft, 10));
-        UI.renderDraftTabs();
-        UI.renderScheduleTab();
-    });
 
     // --- Randomize popup ---
     UI.el('randomCancel').addEventListener('click', () => UI.closeRandomModal());
@@ -140,6 +133,8 @@
 
     container.addEventListener('click', e => {
         // per-position action buttons in the table header
+        const dt = e.target.closest('.draft-tab');
+        if (dt) { e.stopPropagation(); App.setActiveDraft(dt.dataset.pos, parseInt(dt.dataset.draft, 10)); UI.renderScheduleTab(); return; }
         const pr = e.target.closest('.pos-random');
         if (pr) { e.stopPropagation(); UI.openRandomModal(pr.dataset.pos); return; }
         const pp = e.target.closest('.pos-print');
@@ -151,6 +146,8 @@
             if (pos && confirm(`ล้างเวรเดือนนี้ของ "${pos.name}" ทั้งหมด? (รายชื่อยังอยู่)`)) { App.clearMonthPos(pc.dataset.pos); UI.renderScheduleTab(); }
             return;
         }
+        const pub = e.target.closest('.pos-publish');
+        if (pub) { e.stopPropagation(); Auth.publishPos(pub.dataset.pos); return; }
         const dayHead = e.target.closest('th.day-col');
         if (dayHead && App.isAdmin()) { UI.openHolidayModal(dayHead); return; }
         const cell = e.target.closest('td.cell');

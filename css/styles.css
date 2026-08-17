@@ -125,6 +125,9 @@ button { font-family: inherit; cursor: pointer; border: none; border-radius: var
 .pos-head h2 { margin: 0; font-size: 19px; color: var(--primary); font-weight: 700; }
 .pos-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .pos-actions button { padding: 5px 12px; font-size: 13px; }
+.pos-publish { background: var(--primary); color: #fff; border: 1px solid var(--primary); border-radius: var(--radius-sm); cursor: pointer; }
+.pos-publish:hover { background: var(--primary-hover); }
+.pos-publish.is-pub { background: #ecfdf5; color: #047857; border-color: #6ee7b7; }
 .pos-sub { font-size: 14px; font-weight: 500; color: var(--text-muted); }
 .pos-empty { color: var(--text-muted); padding: 16px 4px; font-size: 15px; }
 .bd-title { font-size: 15px; color: var(--primary); font-weight: 700; margin: 18px 0 8px; }
