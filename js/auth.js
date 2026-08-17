@@ -159,10 +159,13 @@ const Auth = {
     async publish() {
         if (!App.isAdmin()) return;
         if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
+        if (!confirm(`เผยแพร่ "ร่างที่ ${App.activeDraftNum()}" ให้เจ้าหน้าที่ดู?\n(ร่างที่เลือกจะกลายเป็นตารางจริง ร่างอื่นถูกล้าง)`)) return;
+        App.promoteActiveDraft(App.currentKey());   // ร่างที่เลือก → ตารางจริง
         App.data.published = true;
         App.data.publishedAt = new Date().toLocaleString('th-TH');
         App.snapshotPublished(App.currentKey());
         App.save();
+        UI.render();
         const st = UI.el('publishStatus');
         st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status';
         const json = await this.postJson({ action: 'publish', data: App.data });

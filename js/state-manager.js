@@ -23,7 +23,8 @@ const App = {
         splitFlip: {},    // { 'YYYY-MM': { splitId: true } } — true = swap which position takes the first half this month
         publishedSchedules: {}, // { 'YYYY-MM': snapshot } — admin's released schedule (frozen at publish, ignores staff swaps) for month-to-month rotation
         swapLog: {},            // { 'YYYY-MM': [{ day, staffId, byName, before:[ids], after:[ids], at }] } — staff shift-swap history (appended by backend)
-        locks: {}               // { 'YYYY-MM': { staffId: [dayNumbers] } } — cells set manually by admin → preserved (not re-randomized)
+        locks: {},              // { 'YYYY-MM': { staffId: [dayNumbers] } } — cells set manually by admin → preserved (not re-randomized), shared across drafts
+        activeDraft: 1          // 1|2|3 — which random draft is being viewed/edited (วันลา+pin ใช้ร่วมทุกร่าง, สุ่มแยกร่าง)
     },
 
     // ---- session (role login, not synced) ----
@@ -296,16 +297,59 @@ const App = {
         return this.ymKey(this.data.year, this.data.month);
     },
 
+    // ---- draft comparison: ร่าง 1/2/3 per month ------------------------------
+    // base store (ymKey) = ร่าง 1 + pin ทั้งหมด (แหล่งจริง) · ร่าง 2/3 (ymKey::d2/d3) = เฉพาะเวรสุ่ม
+    // อ่าน: pin/pickOwn → base เสมอ (ใช้ร่วมทุกร่าง) · เวรสุ่ม → store ของร่างที่ดูอยู่
+    activeDraftNum() { return this.data.activeDraft || 1; },
+    draftKey(ymKey) { const n = this.activeDraftNum(); return n === 1 ? ymKey : ymKey + '::d' + n; },
+    setActiveDraft(n) {
+        n = Math.max(1, Math.min(3, n | 0));
+        this.data.activeDraft = n;
+        if (n > 1) { const k = this.draftKey(this.currentKey()); if (!this.data.schedules[k]) this.data.schedules[k] = {}; }
+        this.save();
+    },
+    // shifts that are shared across every draft (pin หรือ เจ้าหน้าที่เลือกเวรเอง) → อ่านจาก base
+    sharedCell(ymKey, staffId, day) {
+        if (this.isLockedCell(ymKey, staffId, day)) return true;
+        const s = this.data.staff.find(x => x.id === staffId);
+        return !!(s && s.pickOwn);
+    },
+
     prevKey() {
         let y = this.data.year, m = this.data.month - 1;
         if (m < 1) { m = 12; y -= 1; }
         return this.ymKey(y, m);
     },
 
-    // freeze a month's schedule as "published by admin" (snapshot ≠ the swap-editable live schedule)
+    // merged board for the ACTIVE draft: draft's random cells + shared pin/pickOwn cells from base
+    effectiveBoard(ymKey) {
+        const base = this.data.schedules[ymKey] || {};
+        if (this.activeDraftNum() === 1) return JSON.parse(JSON.stringify(base));
+        const board = JSON.parse(JSON.stringify(this.data.schedules[this.draftKey(ymKey)] || {}));
+        const put = (sid, day) => {
+            const v = base[sid] && base[sid][day];
+            if (v == null) return;
+            (board[sid] = board[sid] || {})[day] = Array.isArray(v) ? v.slice() : [v];
+        };
+        const locks = (this.data.locks && this.data.locks[ymKey]) || {};
+        Object.keys(locks).forEach(sid => (locks[sid] || []).forEach(d => put(sid, d)));
+        this.data.staff.filter(s => s.pickOwn).forEach(s => { const days = base[s.id]; if (days) Object.keys(days).forEach(d => put(s.id, +d)); });
+        return board;
+    },
+
+    // promote the ACTIVE draft to the live/base board (ร่างที่เลือก = ตารางจริง) — scratch drafts consumed, back to ร่าง 1
+    promoteActiveDraft(ymKey) {
+        const board = this.effectiveBoard(ymKey);
+        this.data.schedules[ymKey] = board;
+        delete this.data.schedules[ymKey + '::d2'];
+        delete this.data.schedules[ymKey + '::d3'];
+        this.data.activeDraft = 1;
+    },
+
+    // freeze a month's schedule as "published by admin" (snapshot ≠ the swap-editable live schedule) — publishes the ACTIVE draft
     snapshotPublished(ymKey) {
         if (!this.data.publishedSchedules) this.data.publishedSchedules = {};
-        this.data.publishedSchedules[ymKey] = JSON.parse(JSON.stringify(this.data.schedules[ymKey] || {}));
+        this.data.publishedSchedules[ymKey] = this.effectiveBoard(ymKey);
     },
 
     // did this staff hold this marker in LAST month's published schedule? (for month-to-month rotation)
@@ -328,31 +372,41 @@ const App = {
 
     // a cell holds up to 2 marker ids; normalize legacy string values to array
     getCell(staffId, day) {
-        const sched = this.currentSchedule();
-        const v = sched[staffId] && sched[staffId][day];
-        if (Array.isArray(v)) return v.slice();
-        return v ? [v] : [];
+        return this.getCellIn(this.currentKey(), staffId, day);
     },
 
+    // MANUAL edit (current month): pinned cell → base (shared across drafts) · otherwise → this draft's store
     setCell(staffId, day, ids) {
-        const sched = this.currentSchedule();
-        if (!sched[staffId]) sched[staffId] = {};
-        if (ids && ids.length) sched[staffId][day] = ids.slice(0, 2);
-        else delete sched[staffId][day];
-        this.save();
+        const key = this.currentKey();
+        if (this.isLockedCell(key, staffId, day)) this.setCellBase(key, staffId, day, ids);
+        else this.setCellIn(key, staffId, day, ids);
     },
 
-    // read/write a cell in an arbitrary month (for cross-month night links)
+    // read a cell (overlay): shared pin/pickOwn from base, otherwise the active draft's random store
     getCellIn(ymKey, staffId, day) {
-        const m = this.data.schedules[ymKey];
+        // fast path: ร่าง 1 → base store only (no overlay work — this is the hot path during สุ่ม)
+        const store = (this.activeDraftNum() === 1 || this.sharedCell(ymKey, staffId, day)) ? ymKey : this.draftKey(ymKey);
+        const m = this.data.schedules[store];
         const v = m && m[staffId] && m[staffId][day];
         if (Array.isArray(v)) return v.slice();
         return v ? [v] : [];
     },
 
-    setCellIn(ymKey, staffId, day, ids) {
+    // MANUAL write to base store (shared across drafts) — for pins incl. cross-month night pairs
+    setCellBase(ymKey, staffId, day, ids) {
         if (!this.data.schedules[ymKey]) this.data.schedules[ymKey] = {};
         const m = this.data.schedules[ymKey];
+        if (!m[staffId]) m[staffId] = {};
+        if (ids && ids.length) m[staffId][day] = ids.slice(0, 2);
+        else delete m[staffId][day];
+        this.save();
+    },
+
+    // RANDOMIZER write → the ACTIVE draft's store (ร่าง 2/3 แยกกัน · ร่าง 1 = base)
+    setCellIn(ymKey, staffId, day, ids) {
+        const store = this.draftKey(ymKey);
+        if (!this.data.schedules[store]) this.data.schedules[store] = {};
+        const m = this.data.schedules[store];
         if (!m[staffId]) m[staffId] = {};
         if (ids && ids.length) m[staffId][day] = ids.slice(0, 2);
         else delete m[staffId][day];
@@ -590,7 +644,7 @@ const App = {
     clearCrossMonthX(staffIds) {
         const prev = Schedule.shiftDate(this.data.year, this.data.month, 1, -1);
         const prevKey = this.ymKey(prev.year, prev.month);
-        if (!this.data.schedules[prevKey]) return;
+        if (!this.data.schedules[this.draftKey(prevKey)]) return;
         const xM = this.data.markers.find(m => (m.text || '').trim().toLowerCase() === 'x');
         if (!xM) return;
         staffIds.forEach(id => {
@@ -600,21 +654,29 @@ const App = {
         });
     },
 
-    clearMonth() {
+    // clear the ACTIVE draft's random cells for these staff, KEEPING shared pin/pickOwn cells
+    clearActiveDraftCells(ids) {
         const key = this.currentKey();
-        this.data.schedules[key] = {};
-        this.clearLocksFor(key, this.data.staff.map(s => s.id));
-        this.clearCrossMonthX(this.data.staff.map(s => s.id));
+        const store = this.data.schedules[this.draftKey(key)];
+        if (!store) return;
+        ids.forEach(id => {
+            if (!store[id]) return;
+            Object.keys(store[id]).forEach(dStr => { if (!this.sharedCell(key, id, +dStr)) delete store[id][+dStr]; });
+            if (!Object.keys(store[id]).length) delete store[id];
+        });
+    },
+
+    clearMonth() {
+        const ids = this.data.staff.map(s => s.id);
+        this.clearActiveDraftCells(ids);
+        this.clearCrossMonthX(ids);
         this.save();
     },
 
     // clear this month's shifts for one position's staff only
     clearMonthPos(posId) {
-        const key = this.currentKey();
-        const sched = this.data.schedules[key];
         const ids = this.data.staff.filter(s => s.pos === posId).map(s => s.id);
-        if (sched) ids.forEach(id => { delete sched[id]; });
-        this.clearLocksFor(key, ids);
+        this.clearActiveDraftCells(ids);
         this.clearCrossMonthX(ids);
         this.save();
     },

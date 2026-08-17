@@ -104,6 +104,7 @@ function writeScheduleSheets_(ss, data) {
 
 function writeSource_(ss, prefix, src, positions, staff, mkText, mkWork) {
   Object.keys(src).sort().forEach(function (ym) {
+    if (ym.indexOf('::') >= 0) return;   // draft ร่าง 2/3 (ymKey::d2) — เก็บใน DATA blob แต่ไม่สร้างชีทคน
     var parts = ym.split('-');
     var gy = parseInt(parts[0], 10) - 543, m = parseInt(parts[1], 10);
     var days = new Date(gy, m, 0).getDate();

@@ -64,16 +64,15 @@ const Schedule = {
 
     // per-staff counts: { markerId: n, ... , _work: total work-marker count }
     staffSummary(staffId) {
-        const sched = App.currentSchedule();
-        const map = sched[staffId] || {};
         const out = { _work: 0 };
-        Object.keys(map).forEach(day => {
-            App.getCell(staffId, day).forEach(id => {
+        const days = this.daysInMonth(App.data.year, App.data.month);
+        for (let day = 1; day <= days; day++) {
+            App.getCell(staffId, day).forEach(id => {   // getCell overlays the active draft
                 out[id] = (out[id] || 0) + 1;
                 const m = App.getMarker(id);
                 if (m && m.work && !App.isNoAfternoonMarker(m)) out._work++;   // x paired with ด → count the night once
             });
-        });
+        }
         return out;
     },
 

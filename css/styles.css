@@ -66,6 +66,16 @@ body {
     border-radius: var(--radius-sm); cursor: pointer; font-size: 15px; padding: 0 14px; line-height: 1;
 }
 .month-arrow:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.draft-tabs { display: flex; gap: 0; }
+.draft-tab {
+    border: 1px solid var(--border); background: #fff; color: var(--text-muted);
+    cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 600; padding: 8px 14px; line-height: 1;
+}
+.draft-tab + .draft-tab { border-left: none; }
+.draft-tab:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.draft-tab:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.draft-tab:hover { color: var(--primary); }
+.draft-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .ctrl-group input, .ctrl-group select {
     font-family: inherit; font-size: 15px; padding: 8px 10px;
     border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -254,7 +264,9 @@ input.mk-inp[type="checkbox"] { width: auto; transform: scale(1.2); cursor: poin
 .cp-pick { padding: 6px 10px; border-radius: 6px; font-weight: 700; font-size: 14px; color: #1f2937; border: 1px solid rgba(0,0,0,0.06); }
 .cp-pick:hover:not([disabled]) { box-shadow: 0 0 0 2px var(--primary); }
 .cp-pick[disabled] { opacity: 0.4; cursor: not-allowed; }
-.cp-foot { display: flex; justify-content: space-between; margin-top: 12px; }
+.cp-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.cp-pin { background: #fff; color: var(--primary); border: 1px solid var(--primary); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; }
+.cp-pin.on { background: var(--primary); color: #fff; }
 .cp-clear { background: #fff; color: var(--danger); border: 1px solid var(--danger); padding: 6px 12px; border-radius: var(--radius-sm); font-size: 13px; }
 .cp-close { background: var(--primary); color: #fff; padding: 6px 16px; border-radius: var(--radius-sm); font-size: 13px; }
 .cp-close:hover { background: var(--primary-hover); }

@@ -22,6 +22,15 @@ const UI = {
             .map((n, i) => `<option value="${i + 1}">${n}</option>`).join('');
         monthSel.value = App.data.month;
         this.el('yearInput').value = App.data.year;
+        this.renderDraftTabs();
+    },
+
+    renderDraftTabs() {
+        const wrap = this.el('draftTabs');
+        if (!wrap) return;
+        const active = App.activeDraftNum();
+        wrap.querySelectorAll('.draft-tab').forEach(b =>
+            b.classList.toggle('active', parseInt(b.dataset.draft, 10) === active));
     },
 
     setSheetStatus(msg, kind) {
@@ -167,7 +176,7 @@ const UI = {
         const we = Schedule.isWeekend(year, month, day) ? ' weekend' : '';
         const hc = Holidays.get(year, month, day) ? ' holiday' : '';
         const lv = App.getLeave(App.currentKey(), staffId).includes(day) ? ' on-leave' : '';
-        const lk = App.isLockedCell(App.currentKey(), staffId, day) ? ' pinned' : '';
+        const lk = (App.isAdmin() && App.isLockedCell(App.currentKey(), staffId, day)) ? ' pinned' : '';
         return `<td class="cell${we}${hc}${lv}${lk}" data-staff="${staffId}" data-day="${day}">${this.cellInner(staffId, day)}</td>`;
     },
 
@@ -284,6 +293,7 @@ const UI = {
             <div class="cp-current">${current}</div>
             <div class="cp-pick-wrap">${picks || '<span class="muted-note">ไม่มีเครื่องหมาย</span>'}</div>
             <div class="cp-foot">
+                ${App.isAdmin() ? `<button class="cp-pin${App.isLockedCell(App.currentKey(), staffId, day) ? ' on' : ''}" type="button" title="ปักหมุดกันสุ่มทับ (ตั้งก่อนกดสุ่ม)">${App.isLockedCell(App.currentKey(), staffId, day) ? '📌 ปักหมุดอยู่' : '📌 ปักหมุด'}</button>` : ''}
                 <button class="cp-clear" type="button">ลบทั้งหมด</button>
                 <button class="cp-close" type="button">เสร็จ</button>
             </div>`;
@@ -306,7 +316,6 @@ const UI = {
         if (arr.length === 1 && App.pairConflict(App.getMarker(arr[0]), App.getMarker(markerId), cat)) return;
         arr.push(markerId);
         App.setCell(staffId, day, arr);
-        this.syncLock(App.currentKey(), staffId, day);
         this.autoLinkNight(markerId);
         this.afterCellChange();
     },
@@ -338,7 +347,6 @@ const UI = {
         if (tArr.length === 1 && App.pairConflict(App.getMarker(tArr[0]), tgt.partner, tCat)) return;
         tArr.push(tgt.partner.id);
         App.setCellIn(tgt.key, staffId, tgt.day, tArr);
-        this.syncLock(tgt.key, staffId, tgt.day);
         if (tgt.key === App.currentKey()) this.refreshCell(staffId, tgt.day, posId);
     },
 
@@ -348,7 +356,7 @@ const UI = {
         if (!table) return;
         table.querySelectorAll(`td.cell[data-day="${day}"]`).forEach(td => {
             td.innerHTML = this.cellInner(td.dataset.staff, day);
-            td.classList.toggle('pinned', App.isLockedCell(App.currentKey(), td.dataset.staff, day));
+            td.classList.toggle('pinned', App.isAdmin() && App.isLockedCell(App.currentKey(), td.dataset.staff, day));
         });
         const cov = table.querySelector(`.cov[data-day="${day}"]`);
         if (cov) cov.textContent = Schedule.dayShiftsPos(posId, day) || '';
@@ -356,10 +364,27 @@ const UI = {
     },
 
     // update one staff's total, then repaint the whole day column
-    // manual popover edits pin the cell (non-empty → lock, empty → unlock) so สุ่ม keeps it
-    syncLock(key, staffId, day) {
-        if (App.getCellIn(key, staffId, day).length) App.lockCell(key, staffId, day);
-        else App.unlockCell(key, staffId, day);
+    // pins are set explicitly via the popover 📌 button — clearing a cell drops its pin
+    unpinIfEmpty(key, staffId, day) {
+        if (!App.getCellIn(key, staffId, day).length) App.unlockCell(key, staffId, day);
+    },
+
+    // toggle pin on the editing cell (+ its night ด/x partner) — copies content to the shared base so it survives on every draft
+    togglePin() {
+        if (!this.editing || !App.isAdmin()) return;
+        const { staffId, day } = this.editing;
+        const key = App.currentKey();
+        const on = !App.isLockedCell(key, staffId, day);
+        const setPin = (k, sid, d) => {
+            if (on) { App.setCellBase(k, sid, d, App.getCellIn(k, sid, d)); App.lockCell(k, sid, d); }
+            else App.unlockCell(k, sid, d);
+        };
+        App.getCell(staffId, day).forEach(id => {   // ด/x pair shares the pin (partner may be another day/month)
+            const tgt = this.nightPartnerTarget(App.getMarker(id));
+            if (tgt) setPin(tgt.key, staffId, tgt.day);
+        });
+        setPin(key, staffId, day);
+        this.afterCellChange();
     },
 
     refreshCell(staffId, day, posId) {
@@ -381,7 +406,6 @@ const UI = {
         if (i < 0) return;
         tArr.splice(i, 1);
         App.setCellIn(tgt.key, staffId, tgt.day, tArr);
-        this.syncLock(tgt.key, staffId, tgt.day);
         if (tgt.key === App.currentKey()) this.refreshCell(staffId, tgt.day, posId);
     },
 
@@ -392,7 +416,7 @@ const UI = {
         const removed = arr[idx];
         arr.splice(idx, 1);
         App.setCell(staffId, day, arr);
-        this.syncLock(App.currentKey(), staffId, day);
+        this.unpinIfEmpty(App.currentKey(), staffId, day);
         if (removed) this.autoUnlinkNight(removed);
         this.afterCellChange();
     },
@@ -402,7 +426,7 @@ const UI = {
         const { staffId, day } = this.editing;
         const removed = App.getCell(staffId, day);
         App.setCell(staffId, day, []);
-        this.syncLock(App.currentKey(), staffId, day);
+        this.unpinIfEmpty(App.currentKey(), staffId, day);
         removed.forEach(id => this.autoUnlinkNight(id));
         this.afterCellChange();
     },

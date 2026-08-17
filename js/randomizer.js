@@ -537,8 +537,8 @@ const Randomizer = {
 
     apply(best, pool, posId, ymKey, dId) {
         const xId = (this.markerByText(posId, 'x') || {}).id;
-        // clear pool cells for this month, but KEEP admin-pinned days (pick-own untouched too)
-        const monthSched = App.data.schedules[ymKey];
+        // clear pool cells in the ACTIVE draft's store, but KEEP admin-pinned days (pick-own untouched too)
+        const monthSched = App.data.schedules[App.draftKey(ymKey)];
         if (monthSched) pool.forEach(s => {
             if (!monthSched[s.id]) return;
             const pinned = App.lockedDaysFor(ymKey, s.id);

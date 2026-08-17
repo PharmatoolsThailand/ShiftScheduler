@@ -52,7 +52,7 @@
     });
 
     // --- General controls ---
-    function applyMonth() { App.save(); UI.render(); }
+    function applyMonth() { App.data.activeDraft = 1; App.save(); UI.render(); }
     UI.el('monthSelect').addEventListener('change', e => { App.data.month = parseInt(e.target.value, 10); applyMonth(); });
     UI.el('yearInput').addEventListener('change', e => {
         const y = parseInt(e.target.value, 10);
@@ -65,6 +65,13 @@
     }
     UI.el('prevMonthBtn').addEventListener('click', () => shiftMonth(-1));
     UI.el('nextMonthBtn').addEventListener('click', () => shiftMonth(1));
+    UI.el('draftTabs').addEventListener('click', e => {
+        const t = e.target.closest('.draft-tab');
+        if (!t) return;
+        App.setActiveDraft(parseInt(t.dataset.draft, 10));
+        UI.renderDraftTabs();
+        UI.renderScheduleTab();
+    });
 
     // --- Randomize popup ---
     UI.el('randomCancel').addEventListener('click', () => UI.closeRandomModal());
@@ -158,6 +165,7 @@
         if (pick && !pick.disabled) { UI.addToCell(pick.dataset.id); return; }
         const del = e.target.closest('.cp-del');
         if (del) { UI.removeFromCell(parseInt(del.dataset.idx, 10)); return; }
+        if (e.target.closest('.cp-pin')) { UI.togglePin(); return; }
         if (e.target.closest('.cp-clear')) { UI.clearCell(); return; }
         if (e.target.closest('.cp-close')) { UI.closePopover(); return; }
     });
