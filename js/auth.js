@@ -16,6 +16,27 @@ const Auth = {
         App.save();
     },
 
+    // ---- network helpers: retry + backoff so transient failures / server-busy don't lose data ----
+    _delay(ms) { return new Promise(r => setTimeout(r, ms)); },
+
+    async postJson(body, tries) {
+        tries = tries || 3;
+        let lastErr = 'ไม่ทราบสาเหตุ';
+        for (let i = 0; i < tries; i++) {
+            try {
+                const res = await fetch(this.getUrl(), {
+                    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(body)
+                });
+                const json = await res.json().catch(() => null);
+                if (json && json.ok) return json;
+                lastErr = (json && json.error) || ('HTTP ' + res.status);
+            } catch (e) { lastErr = e.message; }
+            if (i < tries - 1) await this._delay(500 * (i + 1) + Math.random() * 300);   // backoff + jitter
+        }
+        return { ok: false, error: lastErr };
+    },
+
     // ---- apply the current role to the DOM ----
     applyRole() {
         document.body.classList.toggle('role-admin', App.isAdmin());
@@ -40,8 +61,12 @@ const Auth = {
             document.querySelectorAll('.tab-panel').forEach(pn => pn.classList.toggle('active', pn.dataset.panel === 'schedule'));
         }
         UI.el('adminPublish').hidden = !App.isAdmin();
+        const cp = UI.el('changePassBtn'); if (cp) cp.hidden = !App.isAdmin();
         this.renderPublishStatus();
     },
+
+    // stored admin-password hash from the best source (local data, else published preview)
+    storedAdminPass() { return App.data.adminPass || (this._preview && this._preview.adminPass) || ''; },
 
     renderPublishStatus() {
         const el = UI.el('publishStatus');
@@ -51,7 +76,13 @@ const Auth = {
     },
 
     // ---- login gate ----
-    renderGate() { this.fillGateStaff(); },
+    renderGate() { this.fillGateStaff(); this.updateAdminHint(); },
+
+    updateAdminHint() {
+        const el = UI.el('adminHint');
+        if (!el) return;
+        el.textContent = this.storedAdminPass() ? '' : '⚠ ยังไม่ได้ตั้งรหัส — พิมพ์รหัสที่ต้องการแล้วกดเข้าสู่ระบบเพื่อตั้งครั้งแรก';
+    },
 
     // use published data from Sheet when available, otherwise the names typed on this device
     gateData() {
@@ -89,17 +120,25 @@ const Auth = {
             if (!data) { msg.textContent = 'ยังไม่มีตารางที่เผยแพร่ — ให้ Admin เผยแพร่ก่อน'; return; }
             this._preview = data;
             this.fillGateStaff();
+            this.updateAdminHint();
             msg.textContent = data.published ? 'เลือกชื่อแล้วกดเข้าสู่ระบบ' : '⏳ ตารางยังไม่เผยแพร่ (เข้าได้แต่จะยังไม่เห็นเวร)';
         } catch (e) { msg.textContent = 'ดึงไม่สำเร็จ: ' + e.message; }
     },
 
-    // fetch the published blob WITHOUT overwriting local App.data
-    async fetchPublished() {
+    // fetch the published blob WITHOUT overwriting local App.data (retries on transient failure)
+    async fetchPublished(tries) {
+        tries = tries || 3;
         const url = this.getUrl();
-        const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'mode=data', { method: 'GET' });
-        const json = await res.json();
-        if (!json || !json.ok || !json.data) return null;
-        return typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+        let lastErr;
+        for (let i = 0; i < tries; i++) {
+            try {
+                const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'mode=data', { method: 'GET' });
+                const json = await res.json();
+                if (!json || !json.ok || !json.data) return null;
+                return typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+            } catch (e) { lastErr = e; if (i < tries - 1) await this._delay(500 * (i + 1)); }
+        }
+        throw lastErr || new Error('ดึงข้อมูลไม่สำเร็จ');
     },
 
     loginAdmin() { App.setSession('admin', null); this.afterLogin(); },
@@ -122,18 +161,25 @@ const Auth = {
         if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
         App.data.published = true;
         App.data.publishedAt = new Date().toLocaleString('th-TH');
+        App.snapshotPublished(App.currentKey());
         App.save();
         const st = UI.el('publishStatus');
         st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status';
-        try {
-            const res = await fetch(this.getUrl(), {
-                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'publish', data: App.data, sheets: UI.buildExportPayload().sheets })
-            });
-            const json = await res.json().catch(() => null);
-            if (json && json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
-            else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + ((json && json.error) || 'อ่านผลไม่ได้'); st.className = 'publish-status err'; }
-        } catch (e) { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + e.message; st.className = 'publish-status err'; }
+        const json = await this.postJson({ action: 'publish', data: App.data });
+        if (json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
+        else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + json.error; st.className = 'publish-status err'; }
+    },
+
+    // ---- save draft (admin): push data now WITHOUT publishing (staff still see "not released") ----
+    async saveDraft() {
+        if (!App.isAdmin()) return;
+        if (!this.validUrl()) { alert('ยังไม่ได้ตั้งค่าลิงก์ Google Sheet'); return; }
+        clearTimeout(this._pushTimer);   // this manual save replaces the pending auto-sync
+        const st = UI.el('publishStatus');
+        if (st) { st.textContent = 'กำลังบันทึก...'; st.className = 'publish-status'; }
+        const json = await this.postJson({ action: 'publish', data: App.data });
+        if (json.ok) this.setSyncStatus(`บันทึกร่างแล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
+        else this.setSyncStatus('บันทึกไม่สำเร็จ: ' + json.error, 'err');
     },
 
     // ---- admin auto-sync: push full data (staff/markers/holidays/schedules) on any edit ----
@@ -146,15 +192,9 @@ const Auth = {
     },
     async pushData() {
         if (!this.validUrl()) return;
-        try {
-            const res = await fetch(this.getUrl(), {
-                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'publish', data: App.data, sheets: UI.buildExportPayload().sheets })
-            });
-            const json = await res.json().catch(() => null);
-            if (json && json.ok) this.setSyncStatus(`ซิงค์ขึ้น Sheet แล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
-            else this.setSyncStatus('ซิงค์ไม่สำเร็จ — ลองกดเผยแพร่อีกครั้ง', 'err');
-        } catch (e) { this.setSyncStatus('ซิงค์ไม่สำเร็จ: ' + e.message, 'err'); }
+        const json = await this.postJson({ action: 'publish', data: App.data });
+        if (json.ok) this.setSyncStatus(`ซิงค์ขึ้น Sheet แล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
+        else this.setSyncStatus('ซิงค์ไม่สำเร็จ (ลองใหม่อัตโนมัติแล้ว) — กด 💾 บันทึกร่าง อีกครั้ง', 'err');
     },
     setSyncStatus(msg, kind) {
         const el = UI.el('publishStatus');
@@ -175,12 +215,17 @@ const Auth = {
         if (!this.validUrl()) return;
         const ym = App.currentKey();
         const cells = (App.data.schedules[ym] && App.data.schedules[ym][staffId]) || {};
-        try {
-            await fetch(this.getUrl(), {
-                method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'swap', ym, staffId, cells })
-            });
-        } catch (e) { /* keep local; retry on next edit */ }
+        const json = await this.postJson({ action: 'swap', ym, staffId, cells });
+        if (json.ok && json.swapLog) {
+            if (!App.data.swapLog) App.data.swapLog = {};
+            App.data.swapLog[ym] = json.swapLog;   // authoritative log (server timestamp + name) → show immediately
+            App.save();
+            UI.renderSwapHistory();
+        }
+        if (UI.setSheetStatus) {
+            if (json.ok) UI.setSheetStatus('บันทึกการแลกเวรแล้ว ✓', 'ok');
+            else UI.setSheetStatus('บันทึกไม่สำเร็จ: ' + json.error + ' — แก้อีกครั้งเพื่อลองใหม่', 'err');
+        }
     },
 
     // ---- refresh: pull the latest published state into App.data ----

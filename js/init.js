@@ -10,12 +10,35 @@
     App.onChange = () => Auth.queueAdminPush();
 
     // --- Auth / role controls ---
-    UI.el('loginAdminBtn').addEventListener('click', () => Auth.loginAdmin());
+    function submitAdminLogin() {
+        const inp = UI.el('adminPass'), msg = UI.el('loginMsg');
+        const entered = inp.value, stored = Auth.storedAdminPass();
+        if (!stored) {
+            if (!entered) { msg.textContent = 'ครั้งแรก: ตั้งรหัส Admin ก่อนเข้าใช้'; return; }
+            inp.value = '';
+            Auth.loginAdmin();
+            App.setAdminPass(entered);   // now admin → save pushes the new password to Sheet
+        } else if (App.checkAdminPass(entered, stored)) {
+            inp.value = '';
+            Auth.loginAdmin();
+        } else {
+            msg.textContent = 'รหัสไม่ถูกต้อง';
+        }
+    }
+    UI.el('loginAdminBtn').addEventListener('click', submitAdminLogin);
+    UI.el('adminPass').addEventListener('keydown', e => { if (e.key === 'Enter') submitAdminLogin(); });
     UI.el('loginStaffBtn').addEventListener('click', () => Auth.loginStaff());
     UI.el('loginPos').addEventListener('change', () => Auth.fillGateNames());
     UI.el('logoutBtn').addEventListener('click', () => Auth.logout());
     UI.el('refreshBtn').addEventListener('click', () => Auth.refresh());
+    UI.el('saveDraftBtn').addEventListener('click', () => Auth.saveDraft());
     UI.el('publishBtn').addEventListener('click', () => Auth.publish());
+
+    // --- Change admin password ---
+    UI.el('changePassBtn').addEventListener('click', () => UI.openPassModal());
+    UI.el('passCancel').addEventListener('click', () => UI.closePassModal());
+    UI.el('passSave').addEventListener('click', () => UI.savePassModal());
+    UI.el('passConfirm').addEventListener('keydown', e => { if (e.key === 'Enter') UI.savePassModal(); });
 
     // --- Tab switching ---
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -29,26 +52,19 @@
     });
 
     // --- General controls ---
-    UI.el('unitInput').addEventListener('input', e => {
-        App.data.unit = e.target.value;
-        App.save();
-        document.querySelectorAll('.pos-sub').forEach(el => el.textContent = UI.monthTitle());
-    });
-    UI.el('monthSelect').addEventListener('change', e => {
-        App.data.month = parseInt(e.target.value, 10);
-        App.save();
-        UI.renderScheduleTab();
-    });
+    function applyMonth() { App.save(); UI.render(); }
+    UI.el('monthSelect').addEventListener('change', e => { App.data.month = parseInt(e.target.value, 10); applyMonth(); });
     UI.el('yearInput').addEventListener('change', e => {
         const y = parseInt(e.target.value, 10);
-        if (y >= 2500 && y <= 2700) {
-            App.data.year = y;
-            App.save();
-            UI.renderScheduleTab();
-        }
+        if (y >= 2500 && y <= 2700) { App.data.year = y; applyMonth(); }
     });
-    UI.el('printBtn').addEventListener('click', () => window.print());
-    UI.el('randomBtn').addEventListener('click', () => UI.openRandomModal());
+    function shiftMonth(d) {
+        let m = App.data.month + d, y = App.data.year;
+        if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+        App.data.month = m; App.data.year = y; applyMonth();
+    }
+    UI.el('prevMonthBtn').addEventListener('click', () => shiftMonth(-1));
+    UI.el('nextMonthBtn').addEventListener('click', () => shiftMonth(1));
 
     // --- Randomize popup ---
     UI.el('randomCancel').addEventListener('click', () => UI.closeRandomModal());
@@ -60,15 +76,21 @@
         if (s) { s.pickOwn = chk.checked; App.save(); }
     });
     UI.el('capMarkers').addEventListener('change', e => {
+        if (!UI.editingCapStaff) return;
         const chk = e.target.closest('.cap-chk');
-        if (chk && UI.editingCapStaff) App.setBlockedMarker(UI.editingCapStaff, chk.dataset.marker, !chk.checked);
+        if (chk) { App.setBlockedMarker(UI.editingCapStaff, chk.dataset.marker, !chk.checked); UI.renderCapMarkers(); return; }
+        const must = e.target.closest('.cap-must-chk');
+        if (must) { App.toggleMustHave(UI.editingCapStaff, must.dataset.marker, must.checked); return; }
+        const dow = e.target.closest('.cap-dow');
+        if (dow) App.toggleDayBan(UI.editingCapStaff, dow.dataset.marker, parseInt(dow.dataset.dow, 10), dow.checked);
     });
     UI.el('capClose').addEventListener('click', () => UI.closeCapModal());
     UI.el('capModal').addEventListener('click', e => { if (e.target.id === 'capModal') UI.closeCapModal(); });
     UI.el('randomRun').addEventListener('click', () => {
         if (!confirm('สุ่มเวรเดือนนี้? เวรของคนที่ถูกสุ่มจะถูกล้างแล้วสุ่มใหม่\n(คนเลือกเอง/ลาศึกษา ไม่ถูกแตะ)')) return;
         let filled = 0, total = 0, doubles = 0, nightViol = 0, aftViol = 0, consecViol = 0; const unfilled = [], broken = [], errs = [];
-        App.data.positions.forEach(p => {
+        const positions = UI.randomPosId ? App.data.positions.filter(p => p.id === UI.randomPosId) : App.data.positions;
+        positions.forEach(p => {
             const r = Randomizer.run(p.id);
             if (r.error) { errs.push(r.error); return; }
             filled += r.filled; total += r.total; doubles += r.doubles || 0; nightViol += r.nightViol || 0; aftViol += r.aftViol || 0; consecViol += r.consecViol || 0;
@@ -105,17 +127,23 @@
         const cl = e.target.closest('.leave-clear');
         if (cl) { App.clearLeave(App.currentKey(), cl.dataset.id); UI.renderLeaveTab(); UI.renderScheduleTab(); return; }
     });
-    UI.el('clearMonthBtn').addEventListener('click', () => {
-        if (confirm('ล้างเวรทั้งหมดของเดือนนี้? (รายชื่อบุคลากรยังอยู่)')) {
-            App.clearMonth();
-            UI.renderScheduleTab();
-        }
-    });
 
     // --- Schedule container: cell popover + staff actions (delegated) ---
     const container = UI.el('scheduleContainer');
 
     container.addEventListener('click', e => {
+        // per-position action buttons in the table header
+        const pr = e.target.closest('.pos-random');
+        if (pr) { e.stopPropagation(); UI.openRandomModal(pr.dataset.pos); return; }
+        const pp = e.target.closest('.pos-print');
+        if (pp) { e.stopPropagation(); UI.printPos(pp.dataset.pos); return; }
+        const pc = e.target.closest('.pos-clear');
+        if (pc) {
+            e.stopPropagation();
+            const pos = App.getPosition(pc.dataset.pos);
+            if (pos && confirm(`ล้างเวรเดือนนี้ของ "${pos.name}" ทั้งหมด? (รายชื่อยังอยู่)`)) { App.clearMonthPos(pc.dataset.pos); UI.renderScheduleTab(); }
+            return;
+        }
         const dayHead = e.target.closest('th.day-col');
         if (dayHead && App.isAdmin()) { UI.openHolidayModal(dayHead); return; }
         const cell = e.target.closest('td.cell');
@@ -191,6 +219,12 @@
             if (s) { const v = parseInt(mi.value, 10); s.maxShifts = (v > 0) ? v : 0; App.save(); }
             return;
         }
+        const mn = e.target.closest('.maxn-inp');
+        if (mn) {
+            const s = App.data.staff.find(x => x.id === mn.dataset.id);
+            if (s) { const v = parseInt(mn.value, 10); s.maxNights = (v > 0) ? v : 0; App.save(); }
+            return;
+        }
         const inp = e.target.closest('.staff-inp');
         if (!inp) return;
         const s = App.data.staff.find(x => x.id === inp.closest('tr').dataset.id);
@@ -257,6 +291,12 @@
         UI.renderStaffEditor();
         UI.renderMarkerSettings();
     });
+    positionsList.addEventListener('change', e => {
+        const sel = e.target.closest('.pos-pairmode-sel');
+        if (!sel) return;
+        const p = App.getPosition(sel.closest('.pos-row').dataset.id);
+        if (p) { p.matchPair = sel.value === 'match'; p.noPair = sel.value === 'no'; App.save(); }
+    });
     positionsList.addEventListener('click', e => {
         const del = e.target.closest('.del-pos');
         if (!del || del.disabled) return;
@@ -305,6 +345,26 @@
         if (inp) { inp.focus(); inp.select(); }
     });
 
+    // --- Half-month split shifts ---
+    const splitsList = UI.el('splitsList');
+    splitsList.addEventListener('change', e => {
+        const inp = e.target.closest('.split-inp');
+        if (!inp) return;
+        const id = inp.closest('.split-row').dataset.id;
+        const f = inp.dataset.field;
+        const val = f === 'boundary' ? Math.min(28, Math.max(1, parseInt(inp.value, 10) || 15)) : inp.value;
+        App.updateSplit(id, { [f]: val });
+        UI.renderSplits();
+        UI.renderScheduleTab();
+    });
+    splitsList.addEventListener('click', e => {
+        const swap = e.target.closest('.swap-split');
+        if (swap) { App.toggleSplitFlip(App.currentKey(), swap.dataset.id); UI.renderSplits(); UI.renderScheduleTab(); return; }
+        const del = e.target.closest('.del-split');
+        if (del) { App.removeSplit(del.dataset.id); UI.renderSplits(); UI.renderScheduleTab(); }
+    });
+    UI.el('addSplitBtn').addEventListener('click', () => { App.addSplit(); UI.renderSplits(); });
+
     // --- Marker settings tab ---
     const markerTable = UI.el('markerTable');
     function onMarkerEdit(e) {
@@ -326,7 +386,8 @@
         const row = inp.closest('tr');
         const id = row.dataset.id;
         const field = inp.dataset.field;
-        const val = inp.type === 'checkbox' ? inp.checked : inp.value;
+        let val = inp.type === 'checkbox' ? inp.checked : inp.value;
+        if (field === 'maxPerMonth') { const v = parseInt(inp.value, 10); val = (v > 0) ? v : 0; }
         App.updateMarker(id, { [field]: val });
 
         const m = App.getMarker(id);

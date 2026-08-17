@@ -17,9 +17,11 @@
         <span id="userWho" class="user-who"></span>
         <div class="user-bar-actions">
             <div id="adminPublish" class="admin-publish" hidden>
+                <button id="saveDraftBtn" class="btn-secondary" type="button">💾 บันทึกร่าง</button>
                 <button id="publishBtn" class="btn-primary" type="button">🌐 เผยแพร่ตาราง</button>
                 <span id="publishStatus" class="publish-status"></span>
             </div>
+            <button id="changePassBtn" class="btn-secondary" type="button" hidden>🔑 เปลี่ยนรหัส</button>
             <button id="refreshBtn" class="btn-secondary" type="button">⟳ ดึงล่าสุด</button>
             <button id="logoutBtn" class="btn-secondary" type="button">ออกจากระบบ</button>
         </div>
@@ -29,22 +31,14 @@
         <!-- Control bar -->
         <section class="content-box no-print">
             <div class="control-bar">
-                <div class="ctrl-group admin-only">
-                    <label>หน่วยงาน / แผนก</label>
-                    <input type="text" id="unitInput" placeholder="เช่น กลุ่มงานเภสัชกรรม">
-                </div>
-                <div class="ctrl-group">
-                    <label>เดือน</label>
-                    <select id="monthSelect"></select>
-                </div>
-                <div class="ctrl-group">
-                    <label>ปี (พ.ศ.)</label>
-                    <input type="number" id="yearInput" min="2500" max="2700">
-                </div>
-                <div class="ctrl-group ctrl-actions">
-                    <button id="randomBtn" class="btn-primary admin-only" type="button">🎲 สุ่มเวร</button>
-                    <button id="printBtn" class="btn-secondary" type="button">🖨 พิมพ์ A4</button>
-                    <button id="clearMonthBtn" class="btn-danger admin-only" type="button">🗑 ล้างเดือนนี้</button>
+                <div class="ctrl-group month-picker">
+                    <label>เดือน / ปี</label>
+                    <div class="month-nav">
+                        <button id="prevMonthBtn" class="month-arrow" type="button" title="เดือนก่อนหน้า">◀</button>
+                        <select id="monthSelect"></select>
+                        <input type="number" id="yearInput" min="2500" max="2700">
+                        <button id="nextMonthBtn" class="month-arrow" type="button" title="เดือนถัดไป">▶</button>
+                    </div>
                 </div>
             </div>
 
@@ -53,6 +47,7 @@
         <!-- Tab navigation -->
         <nav class="tab-nav no-print">
             <button class="tab-btn active" data-tab="schedule" type="button">🗓️ ตารางเวร</button>
+            <button class="tab-btn" data-tab="swaps" type="button">🔁 ประวัติแลกเวร</button>
             <button class="tab-btn admin-only" data-tab="staff" type="button">👥 บุคลากร</button>
             <button class="tab-btn admin-only" data-tab="leave" type="button">🏖️ วันลา</button>
             <button class="tab-btn admin-only" data-tab="markers" type="button">⚙️ ตั้งค่าเวร</button>
@@ -61,6 +56,17 @@
         <!-- Tab: Schedule -->
         <section class="tab-panel active" data-panel="schedule">
             <div id="scheduleContainer"></div>
+        </section>
+
+        <!-- Tab: Swap history -->
+        <section class="tab-panel no-print" data-panel="swaps">
+            <div class="content-box">
+                <div class="table-title">
+                    <h2>🔁 ประวัติแลกเวร <span id="swapMonthLabel" class="pos-sub"></span></h2>
+                    <span id="swapCount" class="table-hint"></span>
+                </div>
+                <div id="swapHistoryList" class="swap-history"></div>
+            </div>
         </section>
 
         <!-- Tab: Staff -->
@@ -134,6 +140,16 @@
 
             <div class="content-box">
                 <div class="table-title">
+                    <h2>🔄 เวรแบ่งครึ่งเดือน</h2>
+                    <span class="table-hint">เวร 1 ตัวที่ 2 ตำแหน่งผลัดกันขึ้นคนละครึ่งเดือน · กด ⇄ สลับครึ่งแรก/หลังต่อเดือน (จำค่าแต่ละเดือน)</span>
+                </div>
+                <div id="splitsList" class="positions-list"></div>
+                <div class="staff-actions">
+                    <button id="addSplitBtn" class="btn-primary" type="button">+ เพิ่มเวรแชร์</button>
+                </div>
+            </div>
+            <div class="content-box">
+                <div class="table-title">
                     <h2>📅 วันหยุดเพิ่มเติม</h2>
                     <span class="table-hint">เพิ่มวันหยุดราชการของปีถัดไป (นอกเหนือจากที่ระบบมีให้) — มีผลกับสีวันหยุดในตาราง + การเช็คเวรบังคับ</span>
                 </div>
@@ -198,10 +214,31 @@
     <!-- Capability (allowed markers) popup -->
     <div id="capModal" class="modal-overlay no-print" hidden>
         <div class="modal-card">
-            <h3 id="capModalTitle">เวรที่ทำได้</h3>
-            <p class="modal-note">ติ๊กเวรที่คนนี้ขึ้นได้ · ไม่ติ๊ก = ทำไม่ได้ (จะไม่ถูกสุ่มลงเวรนั้น)</p>
+            <h3 id="capModalTitle">เงื่อนไขเวร</h3>
+            <p class="modal-note">“ต้องได้ ≥1 เวร/เดือน” = การสุ่มจะจัดเวรนั้นให้อย่างน้อย 1 ครั้ง (เช่น ต้องได้ SMC) · ติ๊กหน้าเวร = ทำได้ · “ห้ามวัน” = ทำได้แต่ห้ามวันที่ติ๊ก</p>
             <div id="capMarkers" class="cap-markers"></div>
             <div class="modal-actions"><span class="modal-spacer"></span><button id="capClose" class="btn-primary" type="button">เสร็จ</button></div>
+        </div>
+    </div>
+
+    <!-- Change admin password popup -->
+    <div id="passModal" class="modal-overlay no-print" hidden>
+        <div class="modal-card">
+            <h3 id="passModalTitle">🔑 เปลี่ยนรหัส Admin</h3>
+            <div id="passCurrentWrap">
+                <label>รหัสเดิม</label>
+                <input type="password" id="passCurrent" autocomplete="current-password">
+            </div>
+            <label>รหัสใหม่</label>
+            <input type="password" id="passNew" autocomplete="new-password">
+            <label>ยืนยันรหัสใหม่</label>
+            <input type="password" id="passConfirm" autocomplete="new-password">
+            <p id="passMsg" class="modal-note"></p>
+            <div class="modal-actions">
+                <span class="modal-spacer"></span>
+                <button id="passCancel" class="btn-secondary" type="button">ยกเลิก</button>
+                <button id="passSave" class="btn-primary" type="button">บันทึก</button>
+            </div>
         </div>
     </div>
 
@@ -210,7 +247,11 @@
         <div class="login-card">
             <h2>🗓️ ตารางเวร โรงพยาบาลเดชอุดม</h2>
             <p class="login-sub">เข้าใช้งานในฐานะ</p>
-            <button id="loginAdminBtn" class="btn-primary login-admin" type="button">🛠️ ผู้จัดตารางเวร (Admin)</button>
+            <div class="login-admin-box">
+                <input type="password" id="adminPass" placeholder="รหัสผ่าน Admin" autocomplete="current-password">
+                <button id="loginAdminBtn" class="btn-primary login-admin" type="button">🛠️ เข้าสู่ระบบ Admin</button>
+            </div>
+            <p id="adminHint" class="login-hint"></p>
             <div class="login-divider"><span>หรือ เจ้าหน้าที่ (แลกเวร)</span></div>
             <label>ตำแหน่ง</label>
             <select id="loginPos"></select>

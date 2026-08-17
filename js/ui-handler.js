@@ -22,53 +22,6 @@ const UI = {
             .map((n, i) => `<option value="${i + 1}">${n}</option>`).join('');
         monthSel.value = App.data.month;
         this.el('yearInput').value = App.data.year;
-        this.el('unitInput').value = App.data.unit || '';
-    },
-
-    // ---- Google Sheet export (used by Auth.publish) -------------------
-    sheetName(ym, posName) {
-        return `${ym} ${posName}`.replace(/[:\\/?*[\]]/g, '-').slice(0, 95);
-    },
-
-    buildExportPayload() {
-        const keys = new Set(Object.keys(App.data.schedules));
-        keys.add(App.currentKey());
-
-        // master staff list (read back via the ⬇ pull)
-        const staffRows = [['ชื่อ-สกุล', 'ตำแหน่งงาน', 'สังกัด']];
-        App.data.staff.forEach(s => {
-            const pos = App.getPosition(s.pos);
-            staffRows.push([s.name, s.role || '', pos ? pos.name : '']);
-        });
-        const sheets = [{ name: 'บุคลากร', values: staffRows }];
-        Array.from(keys).sort().forEach(ym => {
-            const [y, m] = ym.split('-').map(Number);
-            const days = Schedule.daysInMonth(y, m);
-            const monthSched = App.data.schedules[ym] || {};
-            App.data.positions.forEach(pos => {
-                const staff = App.data.staff.filter(s => s.pos === pos.id);
-                if (!staff.length) return;
-                const header = ['ชื่อ-สกุล', 'ตำแหน่งงาน'];
-                for (let d = 1; d <= days; d++) header.push(d);
-                header.push('รวมเวร');
-                const rows = [header];
-                staff.forEach(s => {
-                    const cells = monthSched[s.id] || {};
-                    const row = [s.name, s.role || ''];
-                    let total = 0;
-                    for (let d = 1; d <= days; d++) {
-                        const v = cells[d];
-                        const arr = Array.isArray(v) ? v : (v ? [v] : []);
-                        row.push(arr.map(id => { const mk = App.getMarker(id); return mk ? mk.text : ''; }).filter(Boolean).join(' '));
-                        arr.forEach(id => { const mk = App.getMarker(id); if (mk && mk.work) total++; });
-                    }
-                    row.push(total || '');
-                    rows.push(row);
-                });
-                sheets.push({ name: this.sheetName(ym, pos.name), values: rows });
-            });
-        });
-        return { generatedAt: new Date().toISOString(), sheets };
     },
 
     setSheetStatus(msg, kind) {
@@ -86,7 +39,35 @@ const UI = {
         this.renderPositionsManager();
         this.renderWorkplaces();
         this.renderMarkerSettings();
+        this.renderSplits();
         this.renderHolidayManager();
+        this.renderSwapHistory();
+    },
+
+    // ---- Swap history tab (staff shift-swaps, per month) ----
+    renderSwapHistory() {
+        const wrap = this.el('swapHistoryList');
+        if (!wrap) return;
+        const ym = App.currentKey();
+        const log = (App.data.swapLog && App.data.swapLog[ym]) || [];
+        const lbl = this.el('swapMonthLabel'); if (lbl) lbl.textContent = '· ' + this.monthTitle();
+        const cnt = this.el('swapCount'); if (cnt) cnt.textContent = log.length ? `รวม ${log.length} ครั้ง` : '';
+        if (!log.length) {
+            wrap.innerHTML = '<div class="muted-note" style="padding:12px">ยังไม่มีการแลกเวรในเดือนนี้</div>';
+            return;
+        }
+        const txt = ids => (ids && ids.length)
+            ? ids.map(id => { const m = App.getMarker(id); return m ? this.esc(m.text) : '?'; }).join(' ')
+            : '<span class="swap-empty">ว่าง</span>';
+        wrap.innerHTML = log.slice().sort((a, b) => (b.at || '').localeCompare(a.at || '')).map(e => {
+            let when = e.at || '';
+            try { when = new Date(e.at).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch (x) { /* keep raw */ }
+            return `<div class="swap-row">
+                <span class="swap-when">${this.esc(when)}</span>
+                <span class="swap-who">${this.esc(e.byName || '?')}</span>
+                <span class="swap-change">วันที่ ${e.day}: <b>${txt(e.before)}</b> <span class="swap-arrow">→</span> <b>${txt(e.after)}</b></span>
+            </div>`;
+        }).join('');
     },
 
     // ---- Schedule tab: one block per position -------------------------
@@ -107,14 +88,21 @@ const UI = {
             ? this.buildScheduleTable(pos.id, staff)
             : `<p class="pos-empty">ยังไม่มีรายชื่อตำแหน่งนี้ — เพิ่มที่แท็บ “บุคลากร”</p>`;
         return `<div class="content-box pos-block" data-pos="${pos.id}">
-            <div class="pos-head">
-                <h2>${this.esc(pos.name)} <span class="pos-sub">${this.monthTitle()}</span></h2>
+            <div class="pos-inner">
+                <div class="pos-head">
+                    <h2>${this.esc(pos.name)} <span class="pos-sub">${this.monthTitle()}</span></h2>
+                    <div class="pos-actions no-print">
+                        <button class="pos-print btn-secondary" data-pos="${pos.id}" type="button">🖨 พิมพ์</button>
+                        <button class="pos-random btn-primary admin-only" data-pos="${pos.id}" type="button">🎲 สุ่ม</button>
+                        <button class="pos-clear btn-danger admin-only" data-pos="${pos.id}" type="button">🗑 ล้าง</button>
+                    </div>
+                </div>
                 <span class="table-hint no-print">คลิกช่อง = เลือกเวร (ใส่ได้ 2) · ดับเบิลคลิกชื่อ = แก้ไข${App.isAdmin() ? ' · คลิกหัววันที่ = เพิ่ม/ลบวันหยุด' : ''} · <span class="hint-wk">เสาร์-อาทิตย์</span> <span class="hint-hol">วันหยุด</span> (ชี้ดูชื่อวันหยุด)</span>
-            </div>
-            ${body}
-            <div class="legend-bar no-print">
-                <span class="legend-label">เครื่องหมาย:</span>
-                <div class="legend">${this.buildLegend(markers)}</div>
+                ${body}
+                <div class="legend-bar no-print">
+                    <span class="legend-label">เครื่องหมาย:</span>
+                    <div class="legend">${this.buildLegend(markers)}</div>
+                </div>
             </div>
         </div>`;
     },
@@ -126,6 +114,7 @@ const UI = {
             `<span class="legend-item"><span class="mk-chip" style="background:${m.color}">${this.markerInner(m)}</span>${m.label ? `<span class="legend-text">${this.esc(m.label)}</span>` : ''}</span>`
         ).join('');
     },
+
 
     buildScheduleTable(posId, staff) {
         const { year, month } = App.data;
@@ -186,7 +175,10 @@ const UI = {
         if (!ids.length) return '';
         const staff = App.data.staff.find(s => s.id === staffId);
         const dup = staff ? Schedule.dupMarkersOnDay(staff.pos, day) : null;
-        return ids.map(id => {
+        // always show เวรเช้า on the left, เวรบ่าย on the right (others in the middle)
+        const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
+        const orderKey = id => { const m = App.getMarker(id); if (!m) return 1; const f = App.slotFlags(m, cat); return f.afternoon ? 2 : f.morning ? 0 : 1; };
+        return ids.slice().sort((a, b) => orderKey(a) - orderKey(b)).map(id => {
             const m = App.getMarker(id);
             if (!m) return '';
             const isDup = dup && dup.has(id);
@@ -199,13 +191,13 @@ const UI = {
         for (let d = 1; d <= days; d++) {
             const we = Schedule.isWeekend(year, month, d) ? ' weekend' : '';
             const hc = Holidays.get(year, month, d) ? ' holiday' : '';
-            covCells += `<td class="cov${we}${hc}" data-day="${d}">${Schedule.dayWorkedPos(posId, d) || ''}</td>`;
+            covCells += `<td class="cov${we}${hc}" data-day="${d}">${Schedule.dayShiftsPos(posId, d) || ''}</td>`;
             const st = this.reqState(posId, d);
             reqCells += `<td class="${st.cls}${we}${hc}" data-day="${d}"${st.title ? ` title="${this.esc(st.title)}"` : ''}>${st.txt}</td>`;
         }
         return `<tfoot>
             <tr class="cov-row">
-                <td class="staff-col cov-head">รวมคนทำงาน/วัน</td>
+                <td class="staff-col cov-head">รวมเวร/วัน</td>
                 ${covCells}
                 <td class="sum-col total-col"></td>
             </tr>
@@ -354,7 +346,7 @@ const UI = {
         table.querySelectorAll(`td.cell[data-day="${day}"]`).forEach(td =>
             td.innerHTML = this.cellInner(td.dataset.staff, day));
         const cov = table.querySelector(`.cov[data-day="${day}"]`);
-        if (cov) cov.textContent = Schedule.dayWorkedPos(posId, day) || '';
+        if (cov) cov.textContent = Schedule.dayShiftsPos(posId, day) || '';
         this.setReqCell(table, posId, day);
     },
 
@@ -424,7 +416,7 @@ const UI = {
             (App.data.workplaces || []).map(w =>
                 `<option value="${w.id}"${s.workplace === w.id ? ' selected' : ''}>${this.esc(w.name)}</option>`).join('');
         const head = `<thead><tr>
-            <th class="num-col">#</th><th>ชื่อ-สกุล</th><th>ตำแหน่งงาน</th><th>สังกัด (ตาราง)</th><th title="สถานที่ทำงาน (OPD/IPD…) — ใช้กติกาวันที่ต้องมาครบ">สถานที่</th><th class="mk-center" title="เวรสูงสุด/เดือน (x+ด=1) · ว่าง=ไม่จำกัด">เวร/เดือน</th><th class="mk-center" title="ชนิดเวรที่คนนี้ขึ้นได้">เวรที่ทำได้</th><th class="mk-center" title="ลาศึกษาต่อ / ไม่ลงเวร — แถวจะเป็นสีเทา">ไม่มีเวร</th><th class="act-col"></th>
+            <th class="num-col">#</th><th class="name-col">ชื่อ-สกุล</th><th>สังกัด (ตาราง)</th><th title="สถานที่ทำงาน (OPD/IPD…) — ใช้กติกาวันที่ต้องมาครบ">สถานที่</th><th class="mk-center" title="เวรสูงสุด/เดือน (x+ด=1) · ว่าง=ไม่จำกัด">เวร/เดือน</th><th class="mk-center" title="ดึก (ด) สูงสุด/เดือน · ว่าง=ตามค่าเริ่มต้น (2)">ดึก/เดือน</th><th class="mk-center" title="ชนิดเวรที่คนนี้ขึ้นได้ + ห้ามเวรบางวัน">เวร/เงื่อนไข</th><th class="mk-center" title="ลาศึกษาต่อ / ไม่ลงเวร — แถวจะเป็นสีเทา">ไม่มีเวร</th><th class="act-col"></th>
         </tr></thead>`;
         const rows = App.data.staff.map((s, i) => {
             const mk = Schedule.markersForPos(s.pos);
@@ -432,12 +424,12 @@ const UI = {
             const cap = nBlock ? `${mk.length - nBlock}/${mk.length}` : 'ทั้งหมด';
             return `<tr data-id="${s.id}"${s.inactive ? ' class="staff-off-row"' : ''}>
             <td class="num-col">${i + 1}</td>
-            <td><input class="staff-inp" data-field="name" value="${this.esc(s.name)}" placeholder="ชื่อ-สกุล"></td>
-            <td><input class="staff-inp" data-field="role" value="${this.esc(s.role || '')}" placeholder="ตำแหน่ง (ไม่บังคับ)"></td>
+            <td><input class="staff-inp name-inp" data-field="name" value="${this.esc(s.name)}" placeholder="ชื่อ-สกุล"></td>
             <td><select class="staff-inp" data-field="pos">${posOpt(s)}</select></td>
             <td><select class="staff-inp" data-field="workplace">${wpOpt(s)}</select></td>
             <td class="mk-center"><input type="number" class="max-inp" data-id="${s.id}" min="0" value="${s.maxShifts || ''}" placeholder="∞"></td>
-            <td class="mk-center"><button class="cap-btn${nBlock ? ' has' : ''}" data-id="${s.id}">${cap}</button></td>
+            <td class="mk-center"><input type="number" class="maxn-inp" data-id="${s.id}" min="0" value="${s.maxNights || ''}" placeholder="2"></td>
+            <td class="mk-center"><button class="cap-btn${nBlock || (s.dayBans && Object.keys(s.dayBans).length) || (s.mustHave && s.mustHave.length) ? ' has' : ''}" data-id="${s.id}">${cap}</button></td>
             <td class="mk-center"><input type="checkbox" class="staff-chk" data-field="inactive"${s.inactive ? ' checked' : ''} title="ลาศึกษาต่อ / ไม่ลงเวร"></td>
             <td class="act-col"><button class="del-staff" data-id="${s.id}" title="ลบแถว">×</button></td>
         </tr>`;
@@ -456,9 +448,16 @@ const UI = {
         wrap.innerHTML = App.data.positions.map(p => {
             const nStaff = Schedule.staffForPos(p.id).length;
             const nMk = Schedule.markersForPos(p.id).length;
+            const mode = p.matchPair ? 'match' : p.noPair ? 'no' : 'auto';
             return `<div class="pos-row" data-id="${p.id}">
                 <input class="pos-inp" value="${this.esc(p.name)}" placeholder="ชื่อตำแหน่ง">
                 <span class="pos-meta">${nStaff} คน · ${nMk} เครื่องหมาย</span>
+                <label class="pos-pairmode" title="เสาร์-อาทิตย์: จะให้คนขึ้น เช้า+บ่าย อย่างไร">ควบ ช+บ (ส-อา):
+                    <select class="pos-pairmode-sel">
+                        <option value="auto"${mode === 'auto' ? ' selected' : ''}>อัตโนมัติ</option>
+                        <option value="match"${mode === 'match' ? ' selected' : ''}>ควบเส้นเดียวกัน (คนเดียวทั้งวัน)</option>
+                        <option value="no"${mode === 'no' ? ' selected' : ''}>ไม่ควบ (คละคน)</option>
+                    </select></label>
                 <button class="del-pos" data-id="${p.id}" title="ลบตำแหน่ง"${canDel ? '' : ' disabled'}>×</button>
             </div>`;
         }).join('');
@@ -490,6 +489,43 @@ const UI = {
                     <span class="wp-dow-label" title="คนสังกัดนี้ (เฉพาะตำแหน่งที่เลือก) ต้องมาครบวันที่เลือก → สุ่มจะเลี่ยงลง ด">ต้องมาครบ (เลี่ยง ด)</span>
                     <div class="wp-sub"><span class="wp-sub-lbl">ตำแหน่ง${allPos ? ' <em>(ว่าง = ทุกตำแหน่ง)</em>' : ''}:</span>${posChips}</div>
                     <div class="wp-sub"><span class="wp-sub-lbl">วัน:</span>${dowChips}</div>
+                </div>
+            </div>`;
+        }).join('');
+    },
+
+    // ---- Half-month split shifts (shared by 2 positions) ----
+    renderSplits() {
+        const wrap = this.el('splitsList');
+        if (!wrap) return;
+        const splits = App.data.splits || [];
+        if (!splits.length) {
+            wrap.innerHTML = '<div class="muted-note" style="padding:8px">ยังไม่มีเวรแชร์ — กด “+ เพิ่มเวรแชร์”</div>';
+            return;
+        }
+        const ymKey = App.currentKey();
+        const mkOpts = cur => '<option value="">— เลือกเวร —</option>' + App.data.markers.map(m =>
+            `<option value="${m.id}"${cur === m.id ? ' selected' : ''}>${this.esc(m.text || m.label || m.id)}</option>`).join('');
+        const posOpts = cur => App.data.positions.map(p =>
+            `<option value="${p.id}"${cur === p.id ? ' selected' : ''}>${this.esc(p.name)}</option>`).join('');
+        wrap.innerHTML = splits.map(sp => {
+            const bnd = sp.boundary || 15;
+            const flipped = App.splitFlipped(ymKey, sp.id);
+            const firstPos = App.getPosition(flipped ? sp.posSecond : sp.posFirst);
+            const secondPos = App.getPosition(flipped ? sp.posFirst : sp.posSecond);
+            return `<div class="split-row" data-id="${sp.id}">
+                <div class="split-head">
+                    <select class="split-inp" data-field="markerId">${mkOpts(sp.markerId)}</select>
+                    <label class="split-bnd">วันตัด <input type="number" class="split-inp" data-field="boundary" min="1" max="28" value="${bnd}"></label>
+                    <button class="del-split" data-id="${sp.id}" title="ลบเวรแชร์">×</button>
+                </div>
+                <div class="split-rule">
+                    <div class="split-sub"><span class="split-lbl">ครึ่งแรก 1–${bnd}:</span><select class="split-inp" data-field="posFirst">${posOpts(sp.posFirst)}</select></div>
+                    <div class="split-sub"><span class="split-lbl">ครึ่งหลัง ${bnd + 1}–สิ้นเดือน:</span><select class="split-inp" data-field="posSecond">${posOpts(sp.posSecond)}</select></div>
+                    <div class="split-month">
+                        <span>เดือน ${this.monthTitle()}: <b>${firstPos ? this.esc(firstPos.name) : '?'}</b> = 1–${bnd} · <b>${secondPos ? this.esc(secondPos.name) : '?'}</b> = ${bnd + 1}–สิ้นเดือน</span>
+                        <button class="swap-split btn-secondary" data-id="${sp.id}" type="button">⇄ สลับเดือนนี้</button>
+                    </div>
                 </div>
             </div>`;
         }).join('');
@@ -532,6 +568,8 @@ const UI = {
                     <label class="mk-slot-row"><span>หยุดราชการ</span><select class="mk-inp" data-field="phSlot">${phSlotSel}</select></label>
                 </td>
                 <td class="mk-center"><input type="checkbox" class="mk-inp" data-field="work"${m.work ? ' checked' : ''}></td>
+                <td class="mk-center"><input type="checkbox" class="mk-inp" data-field="light"${m.light ? ' checked' : ''}></td>
+                <td class="mk-center"><input type="number" class="mk-inp mk-cap" data-field="maxPerMonth" min="0" value="${m.maxPerMonth || ''}" placeholder="∞"></td>
                 <td class="mk-req">
                     <div class="mk-req-presets">
                         <label><input type="checkbox" class="mk-inp" data-field="reqWeekday"${m.reqWeekday ? ' checked' : ''}> ธรรมดา</label>
@@ -544,7 +582,7 @@ const UI = {
             </tr>`;
         }).join('');
         tbl.innerHTML = `<thead><tr>
-            <th>ตัวอย่าง</th><th>ข้อความ</th><th>แบบ</th><th>ความหมาย</th><th>ตำแหน่งที่ใช้</th><th>สี</th><th title="ช่วงเวลาเวร (วันธรรมดา/วันหยุด) — ใช้กับกติกา X/ด + การจับคู่สุ่ม · กลางวัน = ครองช่วงกลางวัน">ช่วงเวลา</th><th title="นับเป็นวันทำงาน">นับงาน</th><th title="เวรที่ต้องมีในแต่ละวัน — ธรรมดา/ส-อา/ราชการ · ราชการ = วันหยุดราชการเท่านั้น · เลือกวัน = จำกัดเฉพาะวันนั้น">บังคับให้มี</th><th></th>
+            <th>ตัวอย่าง</th><th>ข้อความ</th><th>แบบ</th><th>ความหมาย</th><th>ตำแหน่งที่ใช้</th><th>สี</th><th title="ช่วงเวลาเวร (วันธรรมดา/วันหยุด) — ใช้กับกติกา X/ด + การจับคู่สุ่ม · กลางวัน = ครองช่วงกลางวัน">ช่วงเวลา</th><th title="นับเป็นวันทำงาน">นับงาน</th><th title="เวรครึ่งวัน/เบา (เช่น smc) — กติกาพักเสาร์-อาทิตย์: ถ้าทำเวรเต็มวันวันหนึ่ง อีกวันต้อง off (เวรเบาไม่นับเต็มวัน)">ครึ่งวัน</th><th title="จำกัดจำนวนครั้ง/เดือน/คน (ว่าง = ไม่จำกัด) — เช่น บางเวรไม่เกิน 1 ครั้ง/เดือน">จำกัด/เดือน</th><th title="เวรที่ต้องมีในแต่ละวัน — ธรรมดา/ส-อา/ราชการ · ราชการ = วันหยุดราชการเท่านั้น · เลือกวัน = จำกัดเฉพาะวันนั้น">บังคับให้มี</th><th></th>
         </tr></thead><tbody>${rows}</tbody>`;
     },
 
@@ -624,8 +662,11 @@ const UI = {
     },
 
     // ---- Randomize popup ---------------------------------------------
-    openRandomModal() {
-        this.el('randomModalTitle').textContent = 'สุ่มเวร — ' + this.monthTitle();
+    randomPosId: null,   // null = ทุกตำแหน่ง · id = เฉพาะตำแหน่งนั้น
+    openRandomModal(posId) {
+        this.randomPosId = posId || null;
+        const pos = posId ? App.getPosition(posId) : null;
+        this.el('randomModalTitle').textContent = 'สุ่มเวร' + (pos ? ' — ' + this.esc(pos.name) : '') + ' · ' + this.monthTitle();
         const r = this.el('randomResult'); r.textContent = ''; r.className = 'random-result';
         this.renderRandomPickOwn();
         this.el('randomModal').hidden = false;
@@ -633,34 +674,82 @@ const UI = {
 
     renderRandomPickOwn() {
         const wrap = this.el('randomPickOwn'); if (!wrap) return;
-        wrap.innerHTML = App.data.staff.filter(s => !s.inactive).map(s =>
+        const staff = App.data.staff.filter(s => !s.inactive && (!this.randomPosId || s.pos === this.randomPosId));
+        wrap.innerHTML = staff.map(s =>
             `<label class="pickown-opt"><input type="checkbox" class="pickown-chk" data-id="${s.id}"${s.pickOwn ? ' checked' : ''}> ${this.esc(s.name)}</label>`
         ).join('');
     },
 
     closeRandomModal() { const m = this.el('randomModal'); if (m) m.hidden = true; },
 
+    // print only one position's table (hide the others just for this print)
+    printPos(posId) {
+        const blocks = Array.from(document.querySelectorAll('.pos-block'));
+        blocks.forEach(b => b.classList.toggle('print-skip', b.dataset.pos !== posId));
+        const target = blocks.find(b => b.dataset.pos === posId);
+        if (target) target.classList.add('print-solo');   // no trailing page-break when alone
+        const cleanup = () => { blocks.forEach(b => b.classList.remove('print-skip', 'print-solo')); window.removeEventListener('afterprint', cleanup); };
+        window.addEventListener('afterprint', cleanup);
+        window.print();
+        setTimeout(cleanup, 1000);   // fallback if afterprint doesn't fire
+    },
+
     // ---- Capability (allowed markers) popup ----
     editingCapStaff: null,
     openCapModal(staffId) {
         const s = App.data.staff.find(x => x.id === staffId); if (!s) return;
         this.editingCapStaff = staffId;
-        this.el('capModalTitle').textContent = 'เวรที่ทำได้ — ' + s.name;
+        this.el('capModalTitle').textContent = 'เงื่อนไขเวร — ' + s.name;
         this.renderCapMarkers();
         this.el('capModal').hidden = false;
     },
     renderCapMarkers() {
         const wrap = this.el('capMarkers'), s = App.data.staff.find(x => x.id === this.editingCapStaff);
         if (!wrap || !s) return;
-        wrap.innerHTML = Schedule.markersForPos(s.pos).map(m =>
-            `<label class="cap-opt"><input type="checkbox" class="cap-chk" data-marker="${m.id}"${App.canDoMarker(s, m.id) ? ' checked' : ''}>
-                <span class="mk-chip" style="background:${m.color}">${this.markerInner(m)}</span>${m.label ? ' ' + this.esc(m.label) : ''}</label>`
-        ).join('');
+        const markers = Schedule.markersForPos(s.pos);
+        const mustChips = markers.map(m =>
+            `<label class="cap-must-chip"><input type="checkbox" class="cap-must-chk" data-marker="${m.id}"${App.mustHaveMarker(s, m.id) ? ' checked' : ''}><span class="mk-chip" style="background:${m.color}">${this.markerInner(m)}</span></label>`).join('');
+        const rows = markers.map(m => {
+            const allowed = App.canDoMarker(s, m.id);
+            const bans = (s.dayBans && s.dayBans[m.id]) || [];
+            const dowChips = [1, 2, 3, 4, 5, 6, 0].map(d =>
+                `<label class="mk-dow-chip"><input type="checkbox" class="cap-dow" data-marker="${m.id}" data-dow="${d}"${bans.includes(d) ? ' checked' : ''}${allowed ? '' : ' disabled'}><span>${Schedule.DOW_NAMES[d]}</span></label>`).join('');
+            return `<div class="cap-row${allowed ? '' : ' cap-off'}">
+                <label class="cap-opt"><input type="checkbox" class="cap-chk" data-marker="${m.id}"${allowed ? ' checked' : ''}>
+                    <span class="mk-chip" style="background:${m.color}">${this.markerInner(m)}</span>${m.label ? ' ' + this.esc(m.label) : ''}</label>
+                <div class="cap-ban"><span class="cap-ban-lbl">ห้ามวัน:</span>${dowChips}</div>
+            </div>`;
+        }).join('');
+        wrap.innerHTML = `<div class="cap-must-row"><span class="cap-must-lbl">ต้องได้ ≥1 เวร/เดือน:</span>${mustChips}</div>${rows}`;
     },
     closeCapModal() {
         const m = this.el('capModal'); if (!m || m.hidden) return;
         this.editingCapStaff = null; m.hidden = true;
         this.renderStaffEditor();
+    },
+
+    // ---- Change admin password ----
+    openPassModal() {
+        if (!App.isAdmin()) return;
+        const hasPass = !!App.data.adminPass;
+        this.el('passModalTitle').textContent = hasPass ? '🔑 เปลี่ยนรหัส Admin' : '🔑 ตั้งรหัส Admin';
+        this.el('passCurrentWrap').hidden = !hasPass;
+        this.el('passCurrent').value = '';
+        this.el('passNew').value = '';
+        this.el('passConfirm').value = '';
+        this.el('passMsg').textContent = '';
+        this.el('passModal').hidden = false;
+    },
+    closePassModal() { this.el('passModal').hidden = true; },
+    savePassModal() {
+        const msg = this.el('passMsg');
+        const hasPass = !!App.data.adminPass;
+        if (hasPass && !App.checkAdminPass(this.el('passCurrent').value)) { msg.textContent = 'รหัสเดิมไม่ถูกต้อง'; return; }
+        const nw = this.el('passNew').value;
+        if (!nw) { msg.textContent = 'กรอกรหัสใหม่'; return; }
+        if (nw !== this.el('passConfirm').value) { msg.textContent = 'ยืนยันรหัสไม่ตรงกัน'; return; }
+        App.setAdminPass(nw);
+        this.closePassModal();
     },
 
     // ---- Custom holidays ---------------------------------------------

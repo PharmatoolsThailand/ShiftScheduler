@@ -8,6 +8,7 @@ const App = {
         autoSync: false,  // auto pull on load + debounced push on change
         published: false, // admin has released the schedule to staff
         publishedAt: '',  // human-readable timestamp of last publish
+        adminPass: '',    // hashed admin password ('' = not set yet → first login sets it)
         year: 0,          // พ.ศ.
         month: 0,         // 1-12
         positions: [],    // [{ id, name }] — เภสัชกร / เจ้าพนักงานเภสัชกรรม ...
@@ -17,20 +18,34 @@ const App = {
         schedules: {},    // { 'YYYY-MM': { staffId: { day: markerId } } }
         customHolidays: {}, // { beYear: { 'MM-DD': name } } — user-added holidays for future years
         leaves: {},       // { 'YYYY-MM': { staffId: [dayNumbers] } } — leave days per month
-        leaveOrder: {}    // { 'YYYY-MM': [staffId...] } — priority order (index 0 = requested first = most protected)
+        leaveOrder: {},   // { 'YYYY-MM': [staffId...] } — priority order (index 0 = requested first = most protected)
+        splits: [],       // [{ id, markerId, posFirst, posSecond, boundary }] — shift shared by 2 positions, split by half-month
+        splitFlip: {},    // { 'YYYY-MM': { splitId: true } } — true = swap which position takes the first half this month
+        publishedSchedules: {}, // { 'YYYY-MM': snapshot } — admin's released schedule (frozen at publish, ignores staff swaps) for month-to-month rotation
+        swapLog: {}             // { 'YYYY-MM': [{ day, staffId, byName, before:[ids], after:[ids], at }] } — staff shift-swap history (appended by backend)
     },
 
     // ---- session (role login, not synced) ----
     SESSION_KEY: 'detudom_shift_session_v1',
     session: { role: null, staffId: null },   // role: 'admin' | 'staff' | null
 
+    // session in sessionStorage → cleared when the browser/tab closes (auto-logout on reopen), kept across refresh
     loadSession() {
-        try { const r = localStorage.getItem(this.SESSION_KEY); if (r) this.session = JSON.parse(r); }
+        try { const r = sessionStorage.getItem(this.SESSION_KEY); if (r) this.session = JSON.parse(r); }
         catch (e) { /* ignore */ }
     },
-    saveSession() { try { localStorage.setItem(this.SESSION_KEY, JSON.stringify(this.session)); } catch (e) { /* ignore */ } },
+    saveSession() { try { sessionStorage.setItem(this.SESSION_KEY, JSON.stringify(this.session)); } catch (e) { /* ignore */ } },
     setSession(role, staffId) { this.session = { role, staffId: staffId || null }; this.saveSession(); },
     logout() { this.session = { role: null, staffId: null }; this.saveSession(); },
+    // ---- admin password (basic obfuscation, synced via Sheet — not strong crypto) ----
+    hashPass(str) {
+        let h = 5381; str = String(str);
+        for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+        return h.toString(36);
+    },
+    setAdminPass(p) { this.data.adminPass = p ? this.hashPass(p) : ''; this.save(); },
+    checkAdminPass(p, storedHash) { return this.hashPass(p) === (storedHash || this.data.adminPass || ''); },
+
     isAdmin() { return this.session.role === 'admin'; },
     isStaff() { return this.session.role === 'staff'; },
     currentStaff() { return this.session.staffId ? this.data.staff.find(s => s.id === this.session.staffId) : null; },
@@ -181,7 +196,7 @@ const App = {
         { id: 'bP', text: '(บ)', deco: '', color: '#dbeafe', work: true, slot: 'afternoon' },
         { id: 'bB', text: 'บ', deco: 'box', color: '#dbeafe', work: true, slot: 'afternoon' },
         { id: 'bS', text: 'บส', deco: '', color: '#dbeafe', work: true, slot: 'afternoon' },
-        { id: 'smc', text: 'smc', deco: '', color: '#ccfbf1', work: true, slot: 'afternoon', weSlot: 'day', phSlot: 'day' },
+        { id: 'smc', text: 'smc', deco: '', color: '#ccfbf1', work: true, slot: 'afternoon', weSlot: 'day', phSlot: 'day', light: true },
         { id: 'ด', text: 'ด', deco: '', color: '#e0e7ff', work: true, slot: 'night' },
         { id: 'x', text: 'x', deco: '', color: '#f1f5f9', work: false, slot: '' }
     ],
@@ -280,6 +295,29 @@ const App = {
         return this.ymKey(this.data.year, this.data.month);
     },
 
+    prevKey() {
+        let y = this.data.year, m = this.data.month - 1;
+        if (m < 1) { m = 12; y -= 1; }
+        return this.ymKey(y, m);
+    },
+
+    // freeze a month's schedule as "published by admin" (snapshot ≠ the swap-editable live schedule)
+    snapshotPublished(ymKey) {
+        if (!this.data.publishedSchedules) this.data.publishedSchedules = {};
+        this.data.publishedSchedules[ymKey] = JSON.parse(JSON.stringify(this.data.schedules[ymKey] || {}));
+    },
+
+    // did this staff hold this marker in LAST month's published schedule? (for month-to-month rotation)
+    hadMarkerLastPublished(staffId, markerId) {
+        const ps = this.data.publishedSchedules;
+        const days = ps && ps[this.prevKey()] && ps[this.prevKey()][staffId];
+        if (!days) return false;
+        return Object.keys(days).some(d => {
+            const v = days[d];
+            return (Array.isArray(v) ? v : [v]).includes(markerId);
+        });
+    },
+
     // Assignment map for the active month (created lazily)
     currentSchedule() {
         const key = this.currentKey();
@@ -357,6 +395,38 @@ const App = {
         return !(s.blockedMarkers && s.blockedMarkers.includes(markerId));
     },
 
+    // per-person day-specific ban: cannot do markerId on this day-of-week (e.g. ห้าม ด / บ วันจันทร์)
+    toggleDayBan(staffId, markerId, dow, on) {
+        const s = this.data.staff.find(x => x.id === staffId);
+        if (!s) return;
+        if (!s.dayBans) s.dayBans = {};
+        const arr = s.dayBans[markerId] || [];
+        const i = arr.indexOf(dow);
+        if (on && i < 0) arr.push(dow);
+        else if (!on && i >= 0) arr.splice(i, 1);
+        if (arr.length) s.dayBans[markerId] = arr; else delete s.dayBans[markerId];
+        this.save();
+    },
+
+    markerBannedOn(s, markerId, dow) {
+        return !!(s.dayBans && s.dayBans[markerId] && s.dayBans[markerId].includes(dow));
+    },
+
+    // per-person "must get ≥1 of this marker per month" (e.g. บางคนต้องได้ smc 1 เวร)
+    mustHaveMarker(s, markerId) {
+        return !!(s.mustHave && s.mustHave.includes(markerId));
+    },
+
+    toggleMustHave(staffId, markerId, on) {
+        const s = this.data.staff.find(x => x.id === staffId);
+        if (!s) return;
+        if (!s.mustHave) s.mustHave = [];
+        const i = s.mustHave.indexOf(markerId);
+        if (on && i < 0) s.mustHave.push(markerId);
+        else if (!on && i >= 0) s.mustHave.splice(i, 1);
+        this.save();
+    },
+
     // ---- custom holidays (beYear -> { 'MM-DD': name }) ----
     addHoliday(year, month, day, name) {
         year = parseInt(year, 10); month = parseInt(month, 10); day = parseInt(day, 10);
@@ -430,8 +500,89 @@ const App = {
         this.save();
     },
 
+    // ---- half-month split shifts (shared by 2 positions) ----
+    splitForMarker(markerId) { return (this.data.splits || []).find(sp => sp.markerId === markerId) || null; },
+
+    splitFlipped(ymKey, splitId) {
+        return !!(this.data.splitFlip && this.data.splitFlip[ymKey] && this.data.splitFlip[ymKey][splitId]);
+    },
+
+    // which position covers this split marker on this day (respects the per-month flip)
+    splitPosFor(sp, ymKey, day) {
+        const flipped = this.splitFlipped(ymKey, sp.id);
+        const inFirst = day <= (sp.boundary || 15);
+        const first = flipped ? sp.posSecond : sp.posFirst;
+        const second = flipped ? sp.posFirst : sp.posSecond;
+        return inFirst ? first : second;
+    },
+
+    addSplit() {
+        const id = 'sp' + Date.now() + Math.floor(Math.random() * 1000);
+        if (!this.data.splits) this.data.splits = [];
+        const p = this.data.positions;
+        this.data.splits.push({
+            id, markerId: '',
+            posFirst: p[0] ? p[0].id : '',
+            posSecond: p[1] ? p[1].id : (p[0] ? p[0].id : ''),
+            boundary: 15
+        });
+        this.save();
+        return id;
+    },
+
+    // keep the shared marker assigned to both positions so it appears in both tables
+    _syncSplitMarkerPos(sp) {
+        const m = this.getMarker(sp.markerId);
+        if (!m) return;
+        if (!m.positions) m.positions = [];
+        [sp.posFirst, sp.posSecond].forEach(pid => { if (pid && !m.positions.includes(pid)) m.positions.push(pid); });
+    },
+
+    updateSplit(id, patch) {
+        const sp = (this.data.splits || []).find(s => s.id === id);
+        if (!sp) return;
+        Object.assign(sp, patch);
+        this._syncSplitMarkerPos(sp);
+        this.save();
+    },
+
+    removeSplit(id) {
+        this.data.splits = (this.data.splits || []).filter(s => s.id !== id);
+        this.save();
+    },
+
+    toggleSplitFlip(ymKey, splitId) {
+        if (!this.data.splitFlip) this.data.splitFlip = {};
+        if (!this.data.splitFlip[ymKey]) this.data.splitFlip[ymKey] = {};
+        this.data.splitFlip[ymKey][splitId] = !this.data.splitFlip[ymKey][splitId];
+        this.save();
+    },
+
+    // remove the night-pair x sitting on the PREVIOUS month's last day (orphaned when this month is cleared/re-randomized)
+    clearCrossMonthX(staffIds) {
+        const prev = Schedule.shiftDate(this.data.year, this.data.month, 1, -1);
+        const prevKey = this.ymKey(prev.year, prev.month);
+        if (!this.data.schedules[prevKey]) return;
+        const xM = this.data.markers.find(m => (m.text || '').trim().toLowerCase() === 'x');
+        if (!xM) return;
+        staffIds.forEach(id => {
+            const arr = this.getCellIn(prevKey, id, prev.day);
+            if (arr.includes(xM.id)) this.setCellIn(prevKey, id, prev.day, arr.filter(v => v !== xM.id));
+        });
+    },
+
     clearMonth() {
         this.data.schedules[this.currentKey()] = {};
+        this.clearCrossMonthX(this.data.staff.map(s => s.id));
+        this.save();
+    },
+
+    // clear this month's shifts for one position's staff only
+    clearMonthPos(posId) {
+        const sched = this.data.schedules[this.currentKey()];
+        const ids = this.data.staff.filter(s => s.pos === posId).map(s => s.id);
+        if (sched) ids.forEach(id => { delete sched[id]; });
+        this.clearCrossMonthX(ids);
         this.save();
     },
 
@@ -498,6 +649,8 @@ const App = {
             // migrate reqHoliday (ส-อา+ราชการรวม) → แยก ส-อา / ราชการ
             if (m.reqWeekend === undefined) m.reqWeekend = !!m.reqHoliday;
             if (m.reqPubHol === undefined) m.reqPubHol = !!m.reqHoliday;
+            // "ครึ่งวัน" (light) — smc เป็นเวรเบาโดยปริยาย (ใช้กับกติกาพักเสาร์-อาทิตย์)
+            if (m.light === undefined) m.light = (m.text || '').trim().toLowerCase() === 'smc';
         });
     }
 };

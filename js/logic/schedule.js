@@ -93,7 +93,12 @@ const Schedule = {
     requiredMissing(posId, year, month, day) {
         const cat = this.dayCategory(year, month, day);
         const dow = this.dayOfWeek(year, month, day);
-        const required = this.markersForPos(posId).filter(m => this.markerRequiredOn(m, cat, dow));
+        const ymKey = App.ymKey(year, month);
+        const required = this.markersForPos(posId).filter(m => {
+            if (!this.markerRequiredOn(m, cat, dow)) return false;
+            const sp = App.splitForMarker(m.id);       // shared shift → required only on this pos's half
+            return !sp || App.splitPosFor(sp, ymKey, day) === posId;
+        });
         if (!required.length) return null;
         const present = new Set();
         this.activeStaffForPos(posId).forEach(s => App.getCell(s.id, day).forEach(id => present.add(id)));
@@ -110,15 +115,14 @@ const Schedule = {
         return dup;
     },
 
-    // count of staff (of one position) with any work-marker on a given day
-    dayWorkedPos(posId, day) {
+    // total work-shifts (of one position) on a given day — counts each shift (เช้า+บ่าย = 2), x ไม่นับ
+    dayShiftsPos(posId, day) {
         let n = 0;
         this.activeStaffForPos(posId).forEach(s => {
-            const working = App.getCell(s.id, day).some(id => {
+            App.getCell(s.id, day).forEach(id => {
                 const m = App.getMarker(id);
-                return m && m.work;
+                if (m && m.work) n++;
             });
-            if (working) n++;
         });
         return n;
     }
