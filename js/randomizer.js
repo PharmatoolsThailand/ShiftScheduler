@@ -119,6 +119,8 @@ const Randomizer = {
         const day2 = {}, count = {}, total = {}, wkDays = {}, lastNight = {}, lastAft = {};  // day2 = staffId → {day:[markerIds]}
         const wpNightCnt = {};  // workplaceId → nights taken on a "must-attend" dow (spread those across depts)
         pool.forEach(s => { day2[s.id] = {}; count[s.id] = {}; total[s.id] = 0; wkDays[s.id] = 0; lastNight[s.id] = 0; lastAft[s.id] = 0; });
+        // "นับงาน" off (work=false, เช่น บส) → ไม่นับเข้ายอดเวรรวมที่ใช้เกลี่ย
+        const isWorkShift = mid => { const mk = App.getMarker(mid); return !!(mk && mk.work && !App.isNoAfternoonMarker(mk)); };
 
         // pre-seed admin-pinned cells so the fill works AROUND them (counts, night-gaps, weekend-rest all include them)
         const lockBy = (locks && locks.bySt) || {}, lockSlots = (locks && locks.slots) || {};
@@ -127,7 +129,8 @@ const Randomizer = {
             const cell = day2[l.staffId][l.day] || (day2[l.staffId][l.day] = []);
             if (cell.includes(l.markerId)) return;
             cell.push(l.markerId);
-            if (!l.isX) { count[l.staffId][l.markerId] = (count[l.staffId][l.markerId] || 0) + 1; total[l.staffId]++; }
+            if (!l.isX) count[l.staffId][l.markerId] = (count[l.staffId][l.markerId] || 0) + 1;
+            if (isWorkShift(l.markerId)) total[l.staffId]++;
         });
         pool.forEach(s => Object.keys(day2[s.id]).forEach(dStr => {
             const d = +dStr, cell = day2[s.id][d], cat = Schedule.dayCategory(year, month, d);
@@ -330,7 +333,7 @@ const Randomizer = {
             assign.push({ day: slot.day, markerId: slot.markerId, staffId: pick.id, isNight, eve, eveSame });
             (day2[pick.id][slot.day] = day2[pick.id][slot.day] || []).push(slot.markerId);
             count[pick.id][slot.markerId] = (count[pick.id][slot.markerId] || 0) + 1;
-            total[pick.id]++;
+            if (isWorkShift(slot.markerId)) total[pick.id]++;
             if (wasEmpty && this.consecRun(day2, pick.id, slot.day, days) > this.MAX_CONSEC) consecViol++;
             if (holiday && wasEmpty) wkDays[pick.id]++;
             const wl = wkLevel(pick.id);
