@@ -30,7 +30,7 @@ const Randomizer = {
     buildSlots(posId) {
         const { year, month } = App.data;
         const days = Schedule.daysInMonth(year, month);
-        const markers = Schedule.markersForPos(posId).filter(m => (m.text || '').trim().toLowerCase() !== 'x');
+        const markers = Schedule.markersForPos(posId).filter(m => (m.text || '').trim().toLowerCase() !== 'x' && !m.noRandom);
         const ymKey = App.ymKey(year, month);
         const slots = [];
         for (let d = 1; d <= days; d++) {
@@ -44,6 +44,23 @@ const Randomizer = {
             });
         }
         return slots;
+    },
+
+    // manual-pinned cells for the pool this month: which days are frozen, which slots are pre-covered, seed values
+    gatherLocks(pool, ymKey) {
+        const bySt = {}, slots = {}, seed = [];
+        pool.forEach(s => {
+            App.lockedDaysFor(ymKey, s.id).forEach(day => {
+                const ids = App.getCellIn(ymKey, s.id, day);
+                if (!ids.length) return;
+                (bySt[s.id] = bySt[s.id] || new Set()).add(day);
+                ids.forEach(mid => {
+                    seed.push({ staffId: s.id, day, markerId: mid, isX: App.isNoAfternoonMarker(App.getMarker(mid)) });
+                    (slots[day] = slots[day] || new Set()).add(mid);
+                });
+            });
+        });
+        return { bySt, slots, seed };
     },
 
     run(posId) {
@@ -62,10 +79,11 @@ const Randomizer = {
         const pos = App.getPosition(posId) || {};
         const noPair = !!pos.noPair;         // ไม่จับคู่ เช้า+บ่าย เสาร์อาทิตย์ (คละคน)
         const matchPair = !!pos.matchPair;   // ควบเต็มวัน เช้า+บ่าย เส้นเดียวกัน (ช*↔บ*) — คนเดียวทั้งวัน อีกวันหยุด
+        const locks = this.gatherLocks(pool, ymKey);   // เวรที่จัดเอง (pin) — คงไว้ + เติมรอบ ๆ
 
         let best = null, bestScore = -Infinity;
         for (let a = 0; a < this.ATTEMPTS; a++) {
-            const r = this.attempt(slots, pool, pickOwn, ymKey, dId, xId, uId, uPrev, noPair, matchPair);
+            const r = this.attempt(slots, pool, pickOwn, ymKey, dId, xId, uId, uPrev, noPair, matchPair, locks);
             const brokeCost = r.broken.reduce((s, b) => s + b.cost, 0);
             // coupling rules: 1-night person must get ≥1 underline-morning · per-person must-have markers
             const n1uGap = uId ? pool.filter(s => (r.count[s.id][dId] || 0) === 1 && !(r.count[s.id][uId] || 0)).length : 0;
@@ -77,8 +95,8 @@ const Randomizer = {
             if (score > bestScore) { bestScore = score; best = r; }
             if (!r.unfilled.length && !r.broken.length && !n1uGap && !mustGap && !r.wkRestLast && !r.consecViol && !r.rotRepeat && !r.wdDoubles && !r.nightViol && !r.aftViol && this.variance(r, pool) === 0) break;
         }
-        this.fillHoles(best, pool, dId, ymKey);   // close leftover holes with safe reshuffles (no rule broken)
-        this.rebalanceTotals(best, pool, dId);    // tighten total-shift spread toward ±1
+        this.fillHoles(best, pool, dId, ymKey, locks);   // close leftover holes with safe reshuffles (no rule broken)
+        this.rebalanceTotals(best, pool, dId, locks);    // tighten total-shift spread toward ±1
         this.apply(best, pool, posId, ymKey, dId);
         return { filled: best.assign.length, unfilled: best.unfilled, broken: best.broken, doubles: best.doubles, nightViol: best.nightViol, aftViol: best.aftViol, consecViol: best.consecViol, total: slots.length };
     },
@@ -95,12 +113,28 @@ const Randomizer = {
     // "เส้น" ของมาร์กเกอร์ = ข้อความที่ตัดตัวอักษรกะ (ช/บ/ด/x) ออก → ช*↔บ* = "*", (ช)↔(บ) = "()", ช↔บ = ""
     lineKey(m) { return m ? (m.text || '').replace(/[ชบดxX]/g, '').trim() : ''; },
 
-    attempt(slots, pool, pickOwn, ymKey, dId, xId, uId, uPrev, noPair, matchPair) {
+    attempt(slots, pool, pickOwn, ymKey, dId, xId, uId, uPrev, noPair, matchPair, locks) {
         const { year, month } = App.data;
         const days = Schedule.daysInMonth(year, month);
         const day2 = {}, count = {}, total = {}, wkDays = {}, lastNight = {}, lastAft = {};  // day2 = staffId → {day:[markerIds]}
         const wpNightCnt = {};  // workplaceId → nights taken on a "must-attend" dow (spread those across depts)
         pool.forEach(s => { day2[s.id] = {}; count[s.id] = {}; total[s.id] = 0; wkDays[s.id] = 0; lastNight[s.id] = 0; lastAft[s.id] = 0; });
+
+        // pre-seed admin-pinned cells so the fill works AROUND them (counts, night-gaps, weekend-rest all include them)
+        const lockBy = (locks && locks.bySt) || {}, lockSlots = (locks && locks.slots) || {};
+        (locks && locks.seed || []).forEach(l => {
+            if (!day2[l.staffId]) return;
+            const cell = day2[l.staffId][l.day] || (day2[l.staffId][l.day] = []);
+            if (cell.includes(l.markerId)) return;
+            cell.push(l.markerId);
+            if (!l.isX) { count[l.staffId][l.markerId] = (count[l.staffId][l.markerId] || 0) + 1; total[l.staffId]++; }
+        });
+        pool.forEach(s => Object.keys(day2[s.id]).forEach(dStr => {
+            const d = +dStr, cell = day2[s.id][d], cat = Schedule.dayCategory(year, month, d);
+            if (cell.includes(dId)) lastNight[s.id] = Math.max(lastNight[s.id], d);
+            if (cell.some(mid => App.slotFlags(App.getMarker(mid), cat).afternoon)) lastAft[s.id] = Math.max(lastAft[s.id], d);
+            if (Schedule.isHoliday(year, month, d) && cell.some(mid => { const mk = App.getMarker(mid); return mk && mk.work && !App.isNoAfternoonMarker(mk); })) wkDays[s.id]++;
+        }));
         const order = App.getLeaveOrder(ymKey);
         const prio = id => order.indexOf(id);
         const assign = [], unfilled = [], broken = [];
@@ -126,6 +160,7 @@ const Randomizer = {
 
         ordered.forEach(slot => {
             if (pickOwn.some(s => App.getCellIn(ymKey, s.id, slot.day).includes(slot.markerId))) return;
+            if (lockSlots[slot.day] && lockSlots[slot.day].has(slot.markerId)) return;   // จัดเองไว้แล้ว — ข้าม
 
             const marker = App.getMarker(slot.markerId);
             const isNight = slot.markerId === dId;
@@ -144,6 +179,7 @@ const Randomizer = {
             // one person can hold a compatible pair: morning+afternoon/smc, or morning+x (going on night — balancing only)
             const canDouble = s => {
                 if (isNight) return false;
+                if (lockBy[s.id] && lockBy[s.id].has(slot.day)) return false;   // วันที่ pin ไว้ — ห้ามเติมทับ
                 const c = cells(s); if (c.length !== 1) return false;
                 const ex = App.getMarker(c[0]);
                 if (!ex || ex.id === marker.id) return false;
@@ -393,10 +429,12 @@ const Randomizer = {
 
     // Repair pass: fill leftover holes WITHOUT breaking any hard rule — by direct fill, or by moving one
     // weekday day-shift to another eligible person to free someone up (augmenting swap). Nights left to admin.
-    fillHoles(best, pool, dId, ymKey) {
+    fillHoles(best, pool, dId, ymKey, locks) {
         const { year, month } = App.data;
         const days = Schedule.daysInMonth(year, month);
         const { day2, count, total, assign } = best;
+        const lockBy = (locks && locks.bySt) || {};
+        const frozen = (sid, day) => !!(lockBy[sid] && lockBy[sid].has(day));   // pin ไว้ — ห้ามย้าย
         const movable = id => { const mk = App.getMarker(id); return !!(mk && mk.work && id !== dId && !App.isNoAfternoonMarker(mk) && !App.isNoMorningMarker(mk)); };
         const add = (sid, day, mid) => { (day2[sid][day] = day2[sid][day] || []).push(mid); count[sid][mid] = (count[sid][mid] || 0) + 1; total[sid]++; };
         const del = (sid, day, mid) => { const a = day2[sid][day] || []; const i = a.indexOf(mid); if (i >= 0) a.splice(i, 1); if (!a.length) delete day2[sid][day]; count[sid][mid]--; total[sid]--; };
@@ -415,6 +453,7 @@ const Randomizer = {
             }
             // 2) augmenting swap — X (working a movable shift m2 today) moves m2 to Y so X can take the hole
             for (const X of pool) {
+                if (frozen(X.id, day)) continue;
                 const cell = day2[X.id][day];
                 if (!cell || cell.length !== 1 || !movable(cell[0])) continue;
                 const m2 = cell[0];
@@ -439,10 +478,12 @@ const Randomizer = {
 
     // Post-pass: even out total shifts (target spread ≤ 1) by moving plain weekday morning/afternoon
     // shifts from over-loaded to under-loaded people — only where it breaks no rule. ด/x/pairs/weekends left alone.
-    rebalanceTotals(best, pool, dId) {
+    rebalanceTotals(best, pool, dId, locks) {
         const { year, month } = App.data;
         const days = Schedule.daysInMonth(year, month);
         const { day2, count, total, assign } = best;
+        const lockBy = (locks && locks.bySt) || {};
+        const frozen = (sid, day) => !!(lockBy[sid] && lockBy[sid].has(day));   // pin ไว้ — ห้ามย้าย
         const movable = id => {
             const m = App.getMarker(id);
             return !!(m && m.work && id !== dId && !App.isNoAfternoonMarker(m) && !App.isNoMorningMarker(m));
@@ -468,6 +509,7 @@ const Randomizer = {
                 let donor = null, donorMid = null;
                 for (const s of pool) {
                     if (s.id === lo.id || total[s.id] <= total[lo.id] + 1) continue;
+                    if (frozen(s.id, d)) continue;
                     const cell = day2[s.id][d];
                     if (!cell || cell.length !== 1 || !movable(cell[0])) continue;
                     const mid = cell[0], mk = App.getMarker(mid);
@@ -492,9 +534,14 @@ const Randomizer = {
 
     apply(best, pool, posId, ymKey, dId) {
         const xId = (this.markerByText(posId, 'x') || {}).id;
-        // clear pool cells for this month (keep pick-own / manual untouched)
+        // clear pool cells for this month, but KEEP admin-pinned days (pick-own untouched too)
         const monthSched = App.data.schedules[ymKey];
-        if (monthSched) pool.forEach(s => { delete monthSched[s.id]; });
+        if (monthSched) pool.forEach(s => {
+            if (!monthSched[s.id]) return;
+            const pinned = App.lockedDaysFor(ymKey, s.id);
+            if (!pinned.length) { delete monthSched[s.id]; return; }
+            Object.keys(monthSched[s.id]).forEach(dStr => { if (!pinned.includes(+dStr)) delete monthSched[s.id][+dStr]; });
+        });
         App.clearCrossMonthX(pool.map(s => s.id));   // remove last month's leftover x paired with a day-1 night
 
         best.assign.forEach(a => {

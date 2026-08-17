@@ -375,6 +375,11 @@
             UI.renderPositionsManager();
             return;
         }
+        const rnd = e.target.closest('.mk-random');
+        if (rnd) {
+            App.updateMarker(rnd.closest('tr').dataset.id, { noRandom: !rnd.checked });   // ติ๊ก=สุ่มให้ · เอาออก=ไม่สุ่ม (ยังเตือนถ้าขาด)
+            return;
+        }
         const dow = e.target.closest('.mk-dow');
         if (dow) {
             App.toggleMarkerDow(dow.closest('tr').dataset.id, parseInt(dow.dataset.dow, 10), dow.checked);

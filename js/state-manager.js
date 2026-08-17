@@ -22,7 +22,8 @@ const App = {
         splits: [],       // [{ id, markerId, posFirst, posSecond, boundary }] — shift shared by 2 positions, split by half-month
         splitFlip: {},    // { 'YYYY-MM': { splitId: true } } — true = swap which position takes the first half this month
         publishedSchedules: {}, // { 'YYYY-MM': snapshot } — admin's released schedule (frozen at publish, ignores staff swaps) for month-to-month rotation
-        swapLog: {}             // { 'YYYY-MM': [{ day, staffId, byName, before:[ids], after:[ids], at }] } — staff shift-swap history (appended by backend)
+        swapLog: {},            // { 'YYYY-MM': [{ day, staffId, byName, before:[ids], after:[ids], at }] } — staff shift-swap history (appended by backend)
+        locks: {}               // { 'YYYY-MM': { staffId: [dayNumbers] } } — cells set manually by admin → preserved (not re-randomized)
     },
 
     // ---- session (role login, not synced) ----
@@ -358,6 +359,33 @@ const App = {
         this.save();
     },
 
+    // ---- manual locks: cells the admin picked by hand are pinned so สุ่ม keeps them ----
+    lockCell(ymKey, staffId, day) {
+        if (!this.data.locks) this.data.locks = {};
+        if (!this.data.locks[ymKey]) this.data.locks[ymKey] = {};
+        const arr = this.data.locks[ymKey][staffId] || (this.data.locks[ymKey][staffId] = []);
+        if (!arr.includes(day)) { arr.push(day); this.save(); }
+    },
+    unlockCell(ymKey, staffId, day) {
+        const m = this.data.locks && this.data.locks[ymKey] && this.data.locks[ymKey][staffId];
+        if (!m) return;
+        const i = m.indexOf(day);
+        if (i >= 0) { m.splice(i, 1); this.save(); }
+    },
+    isLockedCell(ymKey, staffId, day) {
+        const m = this.data.locks && this.data.locks[ymKey] && this.data.locks[ymKey][staffId];
+        return !!(m && m.includes(day));
+    },
+    lockedDaysFor(ymKey, staffId) {
+        const m = this.data.locks && this.data.locks[ymKey] && this.data.locks[ymKey][staffId];
+        return m ? m.slice() : [];
+    },
+    clearLocksFor(ymKey, staffIds) {
+        const m = this.data.locks && this.data.locks[ymKey];
+        if (!m) return;
+        staffIds.forEach(id => { delete m[id]; });
+    },
+
     addStaff(name, role, pos) {
         const id = 's' + Date.now() + Math.floor(Math.random() * 1000);
         this.data.staff.push({ id, name: name.trim(), role: (role || '').trim(), pos: pos || this.firstPosId() });
@@ -566,22 +594,27 @@ const App = {
         const xM = this.data.markers.find(m => (m.text || '').trim().toLowerCase() === 'x');
         if (!xM) return;
         staffIds.forEach(id => {
+            if (this.isLockedCell(prevKey, id, prev.day)) return;   // manual pin (คู่ ด วันที่ 1) — คงไว้
             const arr = this.getCellIn(prevKey, id, prev.day);
             if (arr.includes(xM.id)) this.setCellIn(prevKey, id, prev.day, arr.filter(v => v !== xM.id));
         });
     },
 
     clearMonth() {
-        this.data.schedules[this.currentKey()] = {};
+        const key = this.currentKey();
+        this.data.schedules[key] = {};
+        this.clearLocksFor(key, this.data.staff.map(s => s.id));
         this.clearCrossMonthX(this.data.staff.map(s => s.id));
         this.save();
     },
 
     // clear this month's shifts for one position's staff only
     clearMonthPos(posId) {
-        const sched = this.data.schedules[this.currentKey()];
+        const key = this.currentKey();
+        const sched = this.data.schedules[key];
         const ids = this.data.staff.filter(s => s.pos === posId).map(s => s.id);
         if (sched) ids.forEach(id => { delete sched[id]; });
+        this.clearLocksFor(key, ids);
         this.clearCrossMonthX(ids);
         this.save();
     },

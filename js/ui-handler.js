@@ -167,7 +167,8 @@ const UI = {
         const we = Schedule.isWeekend(year, month, day) ? ' weekend' : '';
         const hc = Holidays.get(year, month, day) ? ' holiday' : '';
         const lv = App.getLeave(App.currentKey(), staffId).includes(day) ? ' on-leave' : '';
-        return `<td class="cell${we}${hc}${lv}" data-staff="${staffId}" data-day="${day}">${this.cellInner(staffId, day)}</td>`;
+        const lk = App.isLockedCell(App.currentKey(), staffId, day) ? ' pinned' : '';
+        return `<td class="cell${we}${hc}${lv}${lk}" data-staff="${staffId}" data-day="${day}">${this.cellInner(staffId, day)}</td>`;
     },
 
     cellInner(staffId, day) {
@@ -305,6 +306,7 @@ const UI = {
         if (arr.length === 1 && App.pairConflict(App.getMarker(arr[0]), App.getMarker(markerId), cat)) return;
         arr.push(markerId);
         App.setCell(staffId, day, arr);
+        this.syncLock(App.currentKey(), staffId, day);
         this.autoLinkNight(markerId);
         this.afterCellChange();
     },
@@ -336,6 +338,7 @@ const UI = {
         if (tArr.length === 1 && App.pairConflict(App.getMarker(tArr[0]), tgt.partner, tCat)) return;
         tArr.push(tgt.partner.id);
         App.setCellIn(tgt.key, staffId, tgt.day, tArr);
+        this.syncLock(tgt.key, staffId, tgt.day);
         if (tgt.key === App.currentKey()) this.refreshCell(staffId, tgt.day, posId);
     },
 
@@ -343,14 +346,22 @@ const UI = {
     refreshDayColumn(posId, day) {
         const table = this.el('scheduleContainer').querySelector(`table[data-pos="${posId}"]`);
         if (!table) return;
-        table.querySelectorAll(`td.cell[data-day="${day}"]`).forEach(td =>
-            td.innerHTML = this.cellInner(td.dataset.staff, day));
+        table.querySelectorAll(`td.cell[data-day="${day}"]`).forEach(td => {
+            td.innerHTML = this.cellInner(td.dataset.staff, day);
+            td.classList.toggle('pinned', App.isLockedCell(App.currentKey(), td.dataset.staff, day));
+        });
         const cov = table.querySelector(`.cov[data-day="${day}"]`);
         if (cov) cov.textContent = Schedule.dayShiftsPos(posId, day) || '';
         this.setReqCell(table, posId, day);
     },
 
     // update one staff's total, then repaint the whole day column
+    // manual popover edits pin the cell (non-empty → lock, empty → unlock) so สุ่ม keeps it
+    syncLock(key, staffId, day) {
+        if (App.getCellIn(key, staffId, day).length) App.lockCell(key, staffId, day);
+        else App.unlockCell(key, staffId, day);
+    },
+
     refreshCell(staffId, day, posId) {
         const table = this.el('scheduleContainer').querySelector(`table[data-pos="${posId}"]`);
         if (!table) return;
@@ -370,6 +381,7 @@ const UI = {
         if (i < 0) return;
         tArr.splice(i, 1);
         App.setCellIn(tgt.key, staffId, tgt.day, tArr);
+        this.syncLock(tgt.key, staffId, tgt.day);
         if (tgt.key === App.currentKey()) this.refreshCell(staffId, tgt.day, posId);
     },
 
@@ -380,6 +392,7 @@ const UI = {
         const removed = arr[idx];
         arr.splice(idx, 1);
         App.setCell(staffId, day, arr);
+        this.syncLock(App.currentKey(), staffId, day);
         if (removed) this.autoUnlinkNight(removed);
         this.afterCellChange();
     },
@@ -389,6 +402,7 @@ const UI = {
         const { staffId, day } = this.editing;
         const removed = App.getCell(staffId, day);
         App.setCell(staffId, day, []);
+        this.syncLock(App.currentKey(), staffId, day);
         removed.forEach(id => this.autoUnlinkNight(id));
         this.afterCellChange();
     },
@@ -578,11 +592,12 @@ const UI = {
                     </div>
                     <div class="mk-dow-row">${dowChips}</div>
                 </td>
+                <td class="mk-center"><input type="checkbox" class="mk-random"${m.noRandom ? '' : ' checked'}></td>
                 <td class="mk-center"><button class="del-marker" data-id="${m.id}" title="ลบ">×</button></td>
             </tr>`;
         }).join('');
         tbl.innerHTML = `<thead><tr>
-            <th>ตัวอย่าง</th><th>ข้อความ</th><th>แบบ</th><th>ความหมาย</th><th>ตำแหน่งที่ใช้</th><th>สี</th><th title="ช่วงเวลาเวร (วันธรรมดา/วันหยุด) — ใช้กับกติกา X/ด + การจับคู่สุ่ม · กลางวัน = ครองช่วงกลางวัน">ช่วงเวลา</th><th title="นับเป็นวันทำงาน">นับงาน</th><th title="เวรครึ่งวัน/เบา (เช่น smc) — กติกาพักเสาร์-อาทิตย์: ถ้าทำเวรเต็มวันวันหนึ่ง อีกวันต้อง off (เวรเบาไม่นับเต็มวัน)">ครึ่งวัน</th><th title="จำกัดจำนวนครั้ง/เดือน/คน (ว่าง = ไม่จำกัด) — เช่น บางเวรไม่เกิน 1 ครั้ง/เดือน">จำกัด/เดือน</th><th title="เวรที่ต้องมีในแต่ละวัน — ธรรมดา/ส-อา/ราชการ · ราชการ = วันหยุดราชการเท่านั้น · เลือกวัน = จำกัดเฉพาะวันนั้น">บังคับให้มี</th><th></th>
+            <th>ตัวอย่าง</th><th>ข้อความ</th><th>แบบ</th><th>ความหมาย</th><th>ตำแหน่งที่ใช้</th><th>สี</th><th title="ช่วงเวลาเวร (วันธรรมดา/วันหยุด) — ใช้กับกติกา X/ด + การจับคู่สุ่ม · กลางวัน = ครองช่วงกลางวัน">ช่วงเวลา</th><th title="นับเป็นวันทำงาน">นับงาน</th><th title="เวรครึ่งวัน/เบา (เช่น smc) — กติกาพักเสาร์-อาทิตย์: ถ้าทำเวรเต็มวันวันหนึ่ง อีกวันต้อง off (เวรเบาไม่นับเต็มวัน)">ครึ่งวัน</th><th title="จำกัดจำนวนครั้ง/เดือน/คน (ว่าง = ไม่จำกัด) — เช่น บางเวรไม่เกิน 1 ครั้ง/เดือน">จำกัด/เดือน</th><th title="เวรที่ต้องมีในแต่ละวัน — ธรรมดา/ส-อา/ราชการ · ราชการ = วันหยุดราชการเท่านั้น · เลือกวัน = จำกัดเฉพาะวันนั้น">บังคับให้มี</th><th title="ติ๊ก = สุ่มให้อัตโนมัติ · ไม่ติ๊ก = ไม่สุ่ม (ยังนับเป็นเวรบังคับ เตือนถ้าขาด — เติมเอง)">สุ่ม</th><th></th>
         </tr></thead><tbody>${rows}</tbody>`;
     },
 
