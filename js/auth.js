@@ -41,6 +41,8 @@ const Auth = {
     applyRole() {
         document.body.classList.toggle('role-admin', App.isAdmin());
         document.body.classList.toggle('role-staff', App.isStaff());
+        // เจ้าหน้าที่ไม่ใช้ระบบร่าง — ล้าง activeDraft ที่อาจค้างจากเวอร์ชันก่อน (กันแก้เวรลง store ร่างผิด)
+        if (App.isStaff() && App.data.activeDraft && Object.keys(App.data.activeDraft).length) { App.data.activeDraft = {}; App.save(); }
         const gate = UI.el('loginGate'), bar = UI.el('userBar');
 
         if (!App.session.role) {
@@ -130,13 +132,15 @@ const Auth = {
     },
 
     // fetch the published blob WITHOUT overwriting local App.data (retries on transient failure)
+    // cache-buster + no-store: บังคับดึงสดทุกครั้ง กัน proxy/บราวเซอร์ cache ตอบข้อมูลเก่า (เวรที่พึ่งแลกจะไม่หาย)
     async fetchPublished(tries) {
         tries = tries || 3;
         const url = this.getUrl();
         let lastErr;
         for (let i = 0; i < tries; i++) {
             try {
-                const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'mode=data', { method: 'GET' });
+                const u = url + (url.includes('?') ? '&' : '?') + 'mode=data&_=' + Date.now();
+                const res = await fetch(u, { method: 'GET', cache: 'no-store' });
                 const json = await res.json();
                 if (!json || !json.ok || !json.data) return null;
                 return typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
@@ -243,16 +247,43 @@ const Auth = {
     },
 
     // ---- refresh: pull the latest published state into App.data ----
+    setRefreshStatus(msg, kind) {
+        const el = UI.el('refreshStatus');
+        if (!el) return;
+        el.textContent = msg;
+        el.className = 'refresh-status' + (kind ? ' ' + kind : '');
+    },
+    fmtFetchTime(iso) {
+        const d = new Date(iso);
+        if (isNaN(d)) return '';
+        return d.toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    },
+    showLastFetch() {   // แสดงเวลาที่ดึงล่าสุดตอนเปิดหน้า (จำใน localStorage ต่อเครื่อง)
+        const t = localStorage.getItem('ss_lastFetch');
+        if (t) this.setRefreshStatus('ข้อมูลล่าสุด: ' + this.fmtFetchTime(t), '');
+    },
     async refresh() {
         if (!this.validUrl()) { alert('ยังไม่ได้ตั้งค่าลิงก์ Google Sheet'); return; }
         if (App.isAdmin() && !confirm('โหลดตารางที่เผยแพร่ล่าสุด? งานที่ยังไม่เผยแพร่ในเครื่องนี้จะถูกทับ')) return;
         if (App.isStaff() && this._unsavedSwap && !confirm('มีการแลกเวรที่ยังไม่บันทึก จะทิ้งแล้วดึงข้อมูลใหม่ไหม?')) return;
-        const data = await this.fetchPublished();
-        if (!data) { alert('ยังไม่มีตารางที่เผยแพร่'); return; }
-        App.loadFrom(data);
-        this._unsavedSwap = false;
-        this.applyRole();
-        UI.render();
-        UI.setSwapStatus('', '');
+        const btn = UI.el('refreshBtn');
+        if (btn) { btn.classList.add('loading'); btn.disabled = true; }
+        this.setRefreshStatus('กำลังดึงข้อมูล...', '');
+        try {
+            const data = await this.fetchPublished();
+            if (!data) { this.setRefreshStatus('ยังไม่มีตารางที่เผยแพร่', 'err'); return; }
+            App.loadFrom(data);
+            this._unsavedSwap = false;
+            this.applyRole();
+            UI.render();
+            UI.setSwapStatus('', '');
+            const now = new Date().toISOString();
+            localStorage.setItem('ss_lastFetch', now);
+            this.setRefreshStatus('ข้อมูลล่าสุด: ' + this.fmtFetchTime(now), 'ok');
+        } catch (e) {
+            this.setRefreshStatus('ดึงไม่สำเร็จ — ลองใหม่', 'err');
+        } finally {
+            if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
+        }
     }
 };

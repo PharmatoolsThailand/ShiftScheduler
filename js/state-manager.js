@@ -444,10 +444,11 @@ const App = {
         return this.getCellIn(this.currentKey(), staffId, day);
     },
 
-    // MANUAL edit (current month): pinned cell → base (shared across drafts) · otherwise → this draft's store
+    // MANUAL edit (current month): shared cell (pin / เลือกเวรเอง) → base · otherwise → this draft's store
+    // (ต้องใช้ sharedCell เดียวกับ getCellIn ไม่งั้น pickOwn จะเขียนลงร่างแต่อ่านจาก base = เวรหาย)
     setCell(staffId, day, ids) {
         const key = this.currentKey();
-        if (this.isLockedCell(key, staffId, day)) this.setCellBase(key, staffId, day, ids);
+        if (this.sharedCell(key, staffId, day)) this.setCellBase(key, staffId, day, ids);
         else this.setCellIn(key, staffId, day, ids);
     },
 
@@ -776,10 +777,13 @@ const App = {
     // replace the whole data set (e.g. pulled published state from Sheet) then persist
     // เดือน/ปีที่กำลังดู = view state ต่อเครื่อง — ไม่เอาค่าจากชีตมาทับ (กันเด้งกลับเดือนที่ admin เซฟไว้)
     loadFrom(obj) {
-        const y = this.data.year, m = this.data.month;
+        const y = this.data.year, m = this.data.month, ad = this.data.activeDraft;
         Object.assign(this.data, obj);
         if (y) this.data.year = y;
         if (m) this.data.month = m;
+        // ร่าง/เดือนที่กำลังดู = view state ต่อเครื่อง — คงของเครื่องตัวเอง ไม่รับของเครื่องอื่นมา
+        // (admin คงร่างที่ทำอยู่ · staff ถูกล้างเป็น {} ใน applyRole เพราะไม่ใช้ระบบร่าง)
+        this.data.activeDraft = (ad && typeof ad === 'object') ? ad : {};
         this._postLoad();
         this.save();
     },

@@ -5,6 +5,7 @@
     Auth.initUrl();
     UI.render();
     Auth.applyRole();
+    Auth.showLastFetch();
 
     // no auto-sync: local edits save to this browser only — admin pushes to the Sheet manually (💾 บันทึก / 🌐 เผยแพร่ per group)
 
