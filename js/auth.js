@@ -165,11 +165,12 @@ const Auth = {
         if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
         const ym = App.currentKey();
         posIds.forEach(pid => { App.promoteActiveDraftPos(ym, pid); App.snapshotPublishedPos(ym, pid); App.markPosPublished(pid); });
+        const staffIds = App.data.staff.filter(s => posIds.includes(s.pos)).map(s => s.id);   // ลบ overlay การแลกเก่าของกลุ่มที่เผยแพร่
         App.save();
         UI.render();
         const st = UI.el('publishStatus');
         if (st) { st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'publish', data: App.data });
+        const json = await this.postJson({ action: 'publish', data: App.data, swapReset: { ym, staffIds } });
         if (st) {
             if (json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
             else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + json.error; st.className = 'publish-status err'; }
