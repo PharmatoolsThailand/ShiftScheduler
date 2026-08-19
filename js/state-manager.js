@@ -393,10 +393,9 @@ const App = {
         if (!this.data.publishedPos || typeof this.data.publishedPos !== 'object') this.data.publishedPos = {};
         const ymKey = this.currentKey();
         const mm = this.data.publishedPos[ymKey] || (this.data.publishedPos[ymKey] = {});
-        const now = new Date().toLocaleString('th-TH');
-        mm[posId] = now;
+        mm[posId] = new Date().toISOString();   // ISO → ใช้เทียบกับเวลาที่ staff แลกเวร (กันเวรแลกเก่าทับตารางที่เผยแพร่ใหม่)
         this.data.published = true;   // legacy month-level flag (any group published → login shows released)
-        this.data.publishedAt = now;
+        this.data.publishedAt = new Date().toLocaleString('th-TH');
     },
 
     // ยกเลิกเผยแพร่กลุ่มนี้ (เดือนปัจจุบัน) — เจ้าหน้าที่จะไม่เห็นตารางกลุ่มนี้ (จอเปล่า)
@@ -407,7 +406,7 @@ const App = {
         const snap = this.data.publishedSchedules && this.data.publishedSchedules[ymKey];
         if (!Object.keys(mm).length && snap && Object.keys(snap).length) {
             // legacy: เผยแพร่แบบเดือน (เห็นทุกกลุ่ม) → บันทึกกลุ่มอื่นเป็น "เผยแพร่แล้ว" ก่อน แล้วค่อยเอากลุ่มนี้ออก
-            const now = new Date().toLocaleString('th-TH');
+            const now = new Date().toISOString();
             this.data.positions.forEach(p => { if (p.id !== posId) mm[p.id] = now; });
         } else {
             delete mm[posId];

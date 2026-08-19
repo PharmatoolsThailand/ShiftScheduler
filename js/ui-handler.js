@@ -2,6 +2,12 @@
 const UI = {
     el(id) { return document.getElementById(id); },
 
+    // ISO → readable (publishedPos เก็บเป็น ISO เพื่อเทียบเวลาแลกเวร) · ค่าเก่า/ไม่ใช่ ISO คืนตามเดิม
+    fmtTime(v) {
+        if (!v) return '';
+        return /^\d{4}-\d\d-\d\dT/.test(v) ? new Date(v).toLocaleString('th-TH') : v;
+    },
+
     markerInner(m) {
         const t = this.esc(m.text || '');
         if (m.deco === 'circle') return `<span class="deco-circle">${t}</span>`;
@@ -104,7 +110,7 @@ const UI = {
                         <button class="pos-random btn-primary admin-only" data-pos="${pos.id}" type="button">🎲 สุ่ม</button>
                         <button class="pos-clear btn-danger admin-only" data-pos="${pos.id}" type="button">🗑 ล้าง</button>
                         <button class="pos-save btn-secondary admin-only" data-pos="${pos.id}" type="button" title="บันทึกงานขึ้น Google Sheet (ไม่เผยแพร่ให้เจ้าหน้าที่)">💾 บันทึก</button>
-                        <button class="pos-publish admin-only${App.posPublished(pos.id) ? ' is-pub' : ''}" data-pos="${pos.id}" type="button" title="${App.posPublished(pos.id) ? 'เผยแพร่แล้ว ' + (((App.data.publishedPos && App.data.publishedPos[App.currentKey()]) || {})[pos.id] || '') + ' — กดเพื่อเผยแพร่ซ้ำ' : 'เผยแพร่กลุ่มนี้ให้เจ้าหน้าที่ดู'}">${App.posPublished(pos.id) ? '✓ เผยแพร่แล้ว' : '🌐 เผยแพร่'}</button>
+                        <button class="pos-publish admin-only${App.posPublished(pos.id) ? ' is-pub' : ''}" data-pos="${pos.id}" type="button" title="${App.posPublished(pos.id) ? 'เผยแพร่แล้ว ' + this.fmtTime(((App.data.publishedPos && App.data.publishedPos[App.currentKey()]) || {})[pos.id]) + ' — กดเพื่อเผยแพร่ซ้ำ' : 'เผยแพร่กลุ่มนี้ให้เจ้าหน้าที่ดู'}">${App.posPublished(pos.id) ? '✓ เผยแพร่แล้ว' : '🌐 เผยแพร่'}</button>
                         ${App.posPublished(pos.id) ? `<button class="pos-unpublish btn-danger admin-only" data-pos="${pos.id}" type="button" title="ยกเลิกเผยแพร่ — เจ้าหน้าที่จะไม่เห็นตารางกลุ่มนี้">↩ ยกเลิกเผยแพร่</button>` : ''}
                     </div>
                 </div>
