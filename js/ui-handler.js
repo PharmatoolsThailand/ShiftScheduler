@@ -454,7 +454,14 @@ const UI = {
         const { staffId, day, posId } = this.editing;
         this.refreshCell(staffId, day, posId);
         this.renderPopover();
-        if (App.isStaff()) Auth.queueSwap(staffId);
+        if (App.isStaff()) { Auth._unsavedSwap = true; this.setSwapStatus('● แก้ไขแล้ว — กด 💾 บันทึกการแลกเวร', 'warn'); }
+    },
+
+    setSwapStatus(msg, kind) {
+        const el = this.el('swapStatus');
+        if (!el) return;
+        el.textContent = msg;
+        el.className = 'publish-status' + (kind ? ' ' + kind : '');
     },
 
     closePopover() {

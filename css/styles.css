@@ -552,6 +552,7 @@ th.total-col { background: #0a655a; }
 .publish-status { font-size: 13px; color: var(--text-muted); }
 .publish-status.ok { color: var(--primary); font-weight: 600; }
 .publish-status.err { color: var(--danger); font-weight: 600; }
+.publish-status.warn { color: #c2410c; font-weight: 600; }
 
 .login-gate {
     position: fixed; inset: 0; z-index: 1000;
@@ -621,5 +622,12 @@ th.total-col { background: #0a655a; }
         background-image: repeating-linear-gradient(45deg, transparent 0 5px, #64748b 5px 7px) !important;
     }
     .cell.pinned { box-shadow: none !important; }
+    /* เช้าขีดเส้นใต้: border-bottom ชิดขอบช่อง (8px) จนกลืนเส้นตาราง → ใช้ text-decoration แทน อยู่ใต้ตัวอักษร ชัดกว่า */
+    .cell .deco-underline {
+        border-bottom: 0 !important; padding-bottom: 0 !important; line-height: 1.1;
+        text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 1px;
+        text-decoration-color: #000;
+        -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
     .table-title h2 { font-size: 13px; }
 }

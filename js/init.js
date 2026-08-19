@@ -31,6 +31,7 @@
     UI.el('logoutBtn').addEventListener('click', () => Auth.logout());
     UI.el('refreshBtn').addEventListener('click', () => Auth.refresh());
     UI.el('saveSettingsBtn').addEventListener('click', () => Auth.pushSave());
+    UI.el('saveSwapBtn').addEventListener('click', () => Auth.saveMySwap());
 
     // --- Table font size (per-device, kept in localStorage — not synced) ---
     function applyCellFont() {

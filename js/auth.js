@@ -62,6 +62,8 @@ const Auth = {
         }
         UI.el('adminPublish').hidden = !App.isAdmin();
         const cp = UI.el('changePassBtn'); if (cp) cp.hidden = !App.isAdmin();
+        const sb = UI.el('saveSwapBtn'); if (sb) sb.hidden = !App.isStaff();
+        const sw = UI.el('swapStatus'); if (sw && !App.isStaff()) { sw.textContent = ''; sw.className = 'publish-status'; }
         this.renderPublishStatus();
     },
 
@@ -215,13 +217,13 @@ const Auth = {
         el.className = 'publish-status' + (kind ? ' ' + kind : '');
     },
 
-    // ---- staff swap edit: merge only this staff's row on the server (debounced) ----
-    _swapTimer: null,
-    queueSwap(staffId) {
-        if (!App.isStaff() || staffId !== App.session.staffId || !this.validUrl()) return;
-        clearTimeout(this._swapTimer);
-        UI.setSheetStatus && UI.setSheetStatus('บันทึกการแลกเวร...', '');
-        this._swapTimer = setTimeout(() => this.pushSwap(staffId), 1500);
+    // ---- staff swap: MANUAL save (no auto-sync) — push only this staff's row ----
+    _unsavedSwap: false,
+    async saveMySwap() {
+        if (!App.isStaff() || !App.session.staffId) return;
+        if (!this.validUrl()) { alert('ยังไม่ได้ตั้งค่าลิงก์ Google Sheet'); return; }
+        UI.setSwapStatus('กำลังบันทึก...', '');
+        await this.pushSwap(App.session.staffId);
     },
     async pushSwap(staffId) {
         if (!this.validUrl()) return;
@@ -234,20 +236,21 @@ const Auth = {
             App.save();
             UI.renderSwapHistory();
         }
-        if (UI.setSheetStatus) {
-            if (json.ok) UI.setSheetStatus('บันทึกการแลกเวรแล้ว ✓', 'ok');
-            else UI.setSheetStatus('บันทึกไม่สำเร็จ: ' + json.error + ' — แก้อีกครั้งเพื่อลองใหม่', 'err');
-        }
+        if (json.ok) { this._unsavedSwap = false; UI.setSwapStatus('บันทึกการแลกเวรแล้ว ✓', 'ok'); }
+        else UI.setSwapStatus('บันทึกไม่สำเร็จ: ' + json.error + ' — กดบันทึกอีกครั้ง', 'err');
     },
 
     // ---- refresh: pull the latest published state into App.data ----
     async refresh() {
         if (!this.validUrl()) { alert('ยังไม่ได้ตั้งค่าลิงก์ Google Sheet'); return; }
         if (App.isAdmin() && !confirm('โหลดตารางที่เผยแพร่ล่าสุด? งานที่ยังไม่เผยแพร่ในเครื่องนี้จะถูกทับ')) return;
+        if (App.isStaff() && this._unsavedSwap && !confirm('มีการแลกเวรที่ยังไม่บันทึก จะทิ้งแล้วดึงข้อมูลใหม่ไหม?')) return;
         const data = await this.fetchPublished();
         if (!data) { alert('ยังไม่มีตารางที่เผยแพร่'); return; }
         App.loadFrom(data);
+        this._unsavedSwap = false;
         this.applyRole();
         UI.render();
+        UI.setSwapStatus('', '');
     }
 };

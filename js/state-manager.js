@@ -775,8 +775,12 @@ const App = {
     },
 
     // replace the whole data set (e.g. pulled published state from Sheet) then persist
+    // เดือน/ปีที่กำลังดู = view state ต่อเครื่อง — ไม่เอาค่าจากชีตมาทับ (กันเด้งกลับเดือนที่ admin เซฟไว้)
     loadFrom(obj) {
+        const y = this.data.year, m = this.data.month;
         Object.assign(this.data, obj);
+        if (y) this.data.year = y;
+        if (m) this.data.month = m;
         this._postLoad();
         this.save();
     },
