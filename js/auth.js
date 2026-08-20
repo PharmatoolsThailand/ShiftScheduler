@@ -154,9 +154,9 @@ const Auth = {
     loginStaff() {
         const id = UI.el('loginName').value;
         if (!id) { UI.el('loginMsg').textContent = 'เลือกชื่อก่อน'; return; }
+        App.setSession('staff', id);   // ตั้ง role ก่อน loadFrom เพื่อให้ applySwapOverlay สร้างตารางบุคลากรถูก
         // adopt the published schedule only if it actually has data (don't wipe local names)
         if (this._preview && this._preview.staff && this._preview.staff.length) App.loadFrom(this._preview);
-        App.setSession('staff', id);
         this.afterLogin();
     },
 
@@ -168,8 +168,9 @@ const Auth = {
         if (!App.isAdmin()) return;
         if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
         const ym = App.currentKey();
-        posIds.forEach(pid => { App.promoteActiveDraftPos(ym, pid); App.snapshotPublishedPos(ym, pid); App.markPosPublished(pid); });
-        const staffIds = App.data.staff.filter(s => posIds.includes(s.pos)).map(s => s.id);   // ลบ overlay การแลกเก่าของกลุ่มที่เผยแพร่
+        // เผยแพร่ = COPY ร่างที่เลือก → ตารางบุคลากร (publishedSchedules) เท่านั้น · ไม่ promote ทับร่าง 1-3 (แยกตารางกัน)
+        posIds.forEach(pid => { App.snapshotPublishedPos(ym, pid); App.markPosPublished(pid); });
+        const staffIds = App.data.staff.filter(s => posIds.includes(s.pos)).map(s => s.id);   // ลบ overlay การแลกเก่าของกลุ่มที่เผยแพร่ (เริ่มใหม่บนตารางที่เพิ่งเผยแพร่)
         App.save();
         UI.render();
         const st = UI.el('publishStatus');

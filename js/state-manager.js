@@ -381,12 +381,17 @@ const App = {
         if (this.data.activeDraft && typeof this.data.activeDraft === 'object') this.data.activeDraft[posId] = 1;
     },
 
-    // freeze ONE position's staff into the published snapshot (merge — other positions kept) for month-to-month rotation
+    // เผยแพร่ = COPY "ร่างที่ admin ดูอยู่" ไปเป็นตารางบุคลากร (publishedSchedules) — ไม่แตะร่าง 1-3 (แยกตารางกัน)
     snapshotPublishedPos(ymKey, posId) {
         if (!this.data.publishedSchedules) this.data.publishedSchedules = {};
         const snap = this.data.publishedSchedules[ymKey] || (this.data.publishedSchedules[ymKey] = {});
-        const base = this.data.schedules[ymKey] || {};
-        this.data.staff.filter(s => s.pos === posId).forEach(s => { snap[s.id] = JSON.parse(JSON.stringify(base[s.id] || {})); });
+        const [y, m] = ymKey.split('-').map(Number);
+        const days = Schedule.daysInMonth(y, m);
+        this.data.staff.filter(s => s.pos === posId).forEach(s => {
+            const cells = {};
+            for (let d = 1; d <= days; d++) { const c = this.getCellIn(ymKey, s.id, d); if (c.length) cells[d] = c; }   // ร่างที่เลือกอยู่ (getCellIn)
+            snap[s.id] = cells;
+        });
     },
 
     markPosPublished(posId) {
@@ -785,7 +790,24 @@ const App = {
         // (admin คงร่างที่ทำอยู่ · staff ถูกล้างเป็น {} ใน applyRole เพราะไม่ใช้ระบบร่าง)
         this.data.activeDraft = (ad && typeof ad === 'object') ? ad : {};
         this._postLoad();
+        this.applySwapOverlay();   // staff → สร้างตารางบุคลากร (เผยแพร่+แลก) · admin → คงร่าง 1-3
         this.save();
+    },
+
+    // staff: "ตารางบุคลากร" = ตารางที่เผยแพร่ (publishedSchedules) + การแลก (overlay) — แยกจากร่าง 1-3 ของ admin
+    // admin: ไม่แตะ → เห็นร่าง 1-3 ตามที่จัด (การแลกของ staff ไม่มายุ่ง)
+    applySwapOverlay() {
+        if (!this.isStaff()) { this.data.swapOverlay = null; return; }
+        const pub = this.data.publishedSchedules || {}, ov = this.data.swapOverlay || {};
+        Object.keys(pub).forEach(ym => { this.data.schedules[ym] = JSON.parse(JSON.stringify(pub[ym] || {})); });   // เริ่มจากสำเนาตารางเผยแพร่
+        Object.keys(ov).forEach(ym => {
+            const store = this.data.schedules[ym] = this.data.schedules[ym] || {};
+            Object.keys(ov[ym]).forEach(sid => {
+                const cells = ov[ym][sid];
+                if (cells && Object.keys(cells).length) store[sid] = cells; else delete store[sid];
+            });
+        });
+        this.data.swapOverlay = null;
     },
 
     _postLoad() {
