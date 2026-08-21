@@ -303,7 +303,8 @@ input.mk-inp[type="checkbox"] { width: auto; transform: scale(1.2); cursor: poin
     background: var(--card-bg); text-align: left;
     width: 200px; padding: 6px 6px 6px 8px;
 }
-thead .staff-col { background: var(--primary); z-index: 4; }
+/* หัวคอลัมน์แรก = มุมล็อกทั้ง sticky-top+left → ต้อง z-index สูงกว่าหัวคอลัมน์วัน (specificity ต้องชนะ .schedule-table thead th) */
+.schedule-table thead th.staff-col { background: var(--primary); z-index: 6; }
 .staff-name { display: block; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .staff-role { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -323,11 +324,10 @@ thead .staff-col { background: var(--primary); z-index: 4; }
     cursor: pointer; user-select: none; color: #1f2937; overflow: hidden;
 }
 .cell-fit {
-    display: inline-flex; gap: 1px;
+    display: inline-flex; flex-wrap: wrap; gap: 1px;
     align-items: center; align-content: center; justify-content: center;
-    max-width: 100%; transform-origin: center center; white-space: nowrap;
-}
-.cell-fit.wrap { flex-wrap: wrap; white-space: normal; }   /* ≥3 เวร/ช่อง → พับเป็น 2 แถว (ช่องสูงขึ้นเอง) */
+    max-width: 100%; transform-origin: center center;
+}   /* wrap เสมอ: เวรไม่พอดีช่อง → พับเป็น 2 แถว (ช่องสูงขึ้นเอง) · พอดี → แถวเดียว */
 .mk-chip {
     display: inline-flex; align-items: center; justify-content: center;
     max-width: 100%; min-width: 13px; padding: 1px 2px; border-radius: 3px;
@@ -375,7 +375,9 @@ th.total-col { background: #0a655a; }
 .req.weekend { background: var(--weekend-bg); }
 .req.holiday { background: var(--holiday-bg); }
 .req.ok { color: #0a8a5f; }
-.req.bad { color: var(--danger); background: #fef2f2; cursor: help; }
+.req.bad { color: var(--danger); background: #fef2f2; cursor: help; padding: 1px; }
+.req-miss { display: inline-flex; flex-wrap: wrap; gap: 1px; align-items: center; justify-content: center; max-width: 100%; }
+.req-mk { min-width: 14px; height: 16px; padding: 0 2px; font-size: 10px; line-height: 1; font-weight: 700; color: #1f2937; box-shadow: 0 0 0 1px var(--danger); }
 
 .empty-hint { text-align: center; color: var(--text-muted); padding: 24px; font-size: 15px; }
 
@@ -630,6 +632,47 @@ th.total-col { background: #0a655a; }
 .schedule-table tr.row-mine .staff-name { color: var(--primary); }
 .schedule-table tr.row-locked .cell { cursor: default; opacity: .85; }
 .schedule-table tr.row-locked .cell:hover { outline: none; }
+
+/* ---- Mobile (โทรศัพท์): ย่อ layout + ตารางเลื่อนซ้าย-ขวา ล็อกคอลัมน์ชื่อ ---- */
+@media (max-width: 680px) {
+    body { font-size: 15px; }
+    .main-header { padding: 14px 12px 6px; }
+    .main-header h1 { font-size: 19px; }
+    .main-header p { font-size: 11px; }
+    .main-container { padding: 6px 8px 32px; }
+    .content-box { padding: 12px 12px; border-radius: 8px; margin-bottom: 12px; }
+    .pos-block { padding: 12px 10px 14px; }
+
+    .user-bar { flex-direction: column; align-items: stretch; }
+    .user-bar-actions { gap: 6px; }
+    .user-bar-actions button { padding: 8px 10px; font-size: 13px; }
+    .control-bar { gap: 10px; }
+    .month-nav #monthSelect { min-width: 90px; }
+
+    /* แท็บ: เลื่อนแนวนอนได้ ไม่ตัดขึ้นบรรทัดใหม่ */
+    .tab-nav { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+    .tab-btn { padding: 9px 12px; font-size: 13px; white-space: nowrap; flex: 0 0 auto; }
+
+    .pos-head h2 { font-size: 16px; }
+    .pos-sub { display: block; font-size: 12px; }
+    .pos-actions button { padding: 5px 9px; font-size: 12px; }
+    .board-toggle-btn { padding: 7px 12px; font-size: 13px; }
+
+    /* ตารางกว้างเกินจอ → เลื่อนซ้าย-ขวา · คอลัมน์ชื่อ (แรก) sticky ล็อกไว้ดูชื่อ */
+    .schedule-table { width: max-content; min-width: 100%; font-size: 12px; }
+    .schedule-table .staff-col { width: 96px; min-width: 96px; padding: 4px 4px 4px 6px; }
+    .schedule-table .day-col { width: 36px; }
+    .schedule-table .sum-col { width: 32px; }
+    .schedule-table .staff-name { font-size: 12px; }
+    .schedule-table .staff-role { font-size: 10px; }
+    .day-col .dnum { font-size: 12px; }
+    .day-col .dow { font-size: 9px; }
+    .cov-head { font-size: 11px; padding: 4px 6px; }
+    .cov, .req { font-size: 12px; }
+
+    /* ตารางตั้งค่าที่กว้าง → เลื่อนในกรอบตัวเอง ไม่ดันหน้า */
+    .marker-editor-wrap, .staff-table-wrap { overflow-x: auto; }
+}
 
 /* ---- Print: A4 landscape — full-width table, each position on its own page ---- */
 @media print {

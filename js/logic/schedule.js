@@ -99,11 +99,10 @@ const Schedule = {
             return !sp || App.splitPosFor(sp, ymKey, day) === posId;
         });
         if (!required.length) return null;
-        // เทียบด้วย "ข้อความ" ไม่ใช่ id — ช สี่เหลี่ยม/วงกลม/ขีดเส้นใต้ (deco ต่างกัน แต่ text 'ช') ถือว่าครบเวร ช เหมือนกัน
-        const norm = m => (m && m.text || '').trim();
+        // เทียบด้วย id — แต่ละ deco (บ, บ สี่เหลี่ยม, ช วงกลม...) เป็นเวรบังคับคนละตัว ไม่นับแทนกัน
         const present = new Set();
-        this.activeStaffForPos(posId).forEach(s => App.getCell(s.id, day).forEach(id => present.add(norm(App.getMarker(id)))));
-        return required.filter(m => !present.has(norm(m)));
+        this.activeStaffForPos(posId).forEach(s => App.getCell(s.id, day).forEach(id => present.add(id)));
+        return required.filter(m => !present.has(m.id));
     },
 
     // marker ids used by 2+ staff (same position) on one day → duplicate shift

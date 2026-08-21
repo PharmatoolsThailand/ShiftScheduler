@@ -390,7 +390,7 @@ const UI = {
             const isDup = dup && dup.has(id);
             return `<span class="mk-chip${isDup ? ' dup' : ''}" style="background:${m.color}"${isDup ? ' title="เวรซ้ำกับคนอื่นในวันนี้"' : ''}>${this.markerInner(m)}</span>`;
         }).join('');
-        return `<span class="cell-fit${ids.length >= 3 ? ' wrap' : ''}">${chips}</span>`;   // ≥3 เวร → พับ 2 แถว · 1-2 เวร → แถวเดียว (auto-fit ย่อ)
+        return `<span class="cell-fit">${chips}</span>`;   // wrap เสมอ: ไม่พอดีช่อง → พับ 2 แถว · พอดี → แถวเดียว
     },
 
     // เวรหลายตัวจะ wrap เป็น 2 แถวเอง (flex-wrap + ช่องสูง auto) — fit นี้ย่อเฉพาะกรณี chip เดียวกว้างเกินช่องจริง ๆ
@@ -430,13 +430,22 @@ const UI = {
         </tfoot>`;
     },
 
-    // ✓ = ครบ · ⚠ = ขาด (title บอกว่าขาดตัวไหน) · ว่าง = วันนี้ไม่ได้ตั้งบังคับ
+    // ชื่อเวรแบบอ่านออก: text + deco (บ สี่เหลี่ยม / ช วงกลม / ช ขีดเส้นใต้) — กันสับสน deco variant ที่ text ซ้ำกัน
+    markerDesc(m) {
+        if (!m) return '?';
+        const deco = { circle: ' วงกลม', box: ' สี่เหลี่ยม', underline: ' ขีดเส้นใต้' }[m.deco] || '';
+        return (m.text || '').trim() + deco;
+    },
+
+    // ✓ = ครบ · ขาด = โชว์ "สัญลักษณ์เวรที่ขาด" จริง (chip + deco) · ว่าง = วันนี้ไม่ได้ตั้งบังคับ
     reqState(posId, day) {
         const { year, month } = App.data;
         const missing = Schedule.requiredMissing(posId, year, month, day);
         if (missing === null) return { cls: 'req', txt: '', title: '' };
         if (!missing.length) return { cls: 'req ok', txt: '✓', title: 'ครบเวรบังคับ' };
-        return { cls: 'req bad', txt: '⚠', title: 'ขาด: ' + missing.map(m => m.text).join(' ') };
+        const chips = missing.map(m => `<span class="mk-chip req-mk" style="background:${m.color}">${this.markerInner(m)}</span>`).join('');
+        const title = 'ขาด: ' + missing.map(m => this.markerDesc(m)).join(' · ');
+        return { cls: 'req bad', txt: `<span class="req-miss">${chips}</span>`, title };
     },
 
     setReqCell(table, posId, day) {
@@ -445,7 +454,7 @@ const UI = {
         const st = this.reqState(posId, day);
         const keep = td.className.match(/\b(weekend|holiday)\b/g) || [];
         td.className = (st.cls + ' ' + keep.join(' ')).trim();
-        td.textContent = st.txt;
+        td.innerHTML = st.txt;   // st.txt เป็น HTML (chip สัญลักษณ์เวรที่ขาด)
         if (st.title) td.setAttribute('title', st.title); else td.removeAttribute('title');
     },
 
