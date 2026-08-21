@@ -275,6 +275,8 @@ const Randomizer = {
                 && (!isNight || (count[s.id][dId] || 0) < nightCap(s))
                 // HARD: ดึกต้องห่างกัน ≥ MIN_NIGHT_GAP วัน · ห้ามเวรเต็มวัน 2 วันของเสาร์-อาทิตย์ (lvl 3) — ยอมเว้นช่องดีกว่าละเมิด
                 && (!isNight || nightGapOk(s.id, this.MIN_NIGHT_GAP))
+                // HARD: ดึกวันที่ 1 — ห้ามคนที่มีเวร "บ่าย" วันสุดท้ายเดือนก่อน (ยึดตารางที่แลกแล้ว) เพราะ x ก่อนดึกจะทับบ่าย
+                && !(isNight && eve && !eveSame && App.prevMonthHasAfternoon(s.id, eve))
                 && wkLevel(s.id) < 3;
             const freeC = soft(relax(markerSpread(pool.filter(s => canPick(s) && emptyDay(s) && !onLeave(s)))));
             const dblC = soft(markerSpread(pool.filter(s => canPick(s) && canDouble(s) && !onLeave(s))));

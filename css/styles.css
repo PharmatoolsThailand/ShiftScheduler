@@ -318,18 +318,22 @@ thead .staff-col { background: var(--primary); z-index: 4; }
 .staff-table .mk-center { text-align: center; }
 
 .cell {
-    height: 34px; padding: 1px; font-weight: 700; font-size: var(--cell-font, 11.5px);
-    cursor: pointer; user-select: none; color: #1f2937;
-    overflow: hidden; white-space: nowrap;
+    min-height: 34px; height: auto; vertical-align: middle;
+    padding: 1px; font-weight: 700; font-size: var(--cell-font, 11.5px);
+    cursor: pointer; user-select: none; color: #1f2937; overflow: hidden;
 }
-.cell-fit { display: inline-flex; align-items: center; justify-content: center; transform-origin: center center; white-space: nowrap; }
+.cell-fit {
+    display: inline-flex; gap: 1px;
+    align-items: center; align-content: center; justify-content: center;
+    max-width: 100%; transform-origin: center center; white-space: nowrap;
+}
+.cell-fit.wrap { flex-wrap: wrap; white-space: normal; }   /* ≥3 เวร/ช่อง → พับเป็น 2 แถว (ช่องสูงขึ้นเอง) */
 .mk-chip {
     display: inline-flex; align-items: center; justify-content: center;
     max-width: 100%; min-width: 13px; padding: 1px 2px; border-radius: 3px;
-    line-height: 1.05; color: #1f2937; overflow: hidden;
+    line-height: 1.05; color: #1f2937; overflow: hidden; white-space: nowrap;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
-.cell .mk-chip + .mk-chip { margin-left: 1px; }
 .mk-chip.dup { box-shadow: 0 0 0 1.6px var(--danger); cursor: help; }
 /* marker decorations */
 .deco-circle, .deco-box {
@@ -424,8 +428,44 @@ th.total-col { background: #0a655a; }
 .cap-opt { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; min-width: 120px; }
 .cap-opt input { width: auto; }
 .cap-opt .mk-chip { font-weight: 700; min-width: 20px; height: 20px; }
+.cap-nm-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; margin-bottom: 4px; border-radius: 6px; background: var(--primary-50, #f0fdfa); font-size: 13px; font-weight: 600; color: var(--primary); cursor: pointer; }
+.cap-nm-row input { width: auto; }
+.cap-nm-hint { flex-basis: 100%; font-size: 11px; font-weight: 400; color: var(--muted, #64748b); }
 .cap-must-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 6px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .cap-must-lbl { font-size: 13px; font-weight: 600; color: var(--primary); }
+
+/* Board toggle: ตารางเวร ↔ ลงเวร Back Office */
+.board-toggle { display: inline-flex; gap: 4px; margin-bottom: 12px; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.board-toggle-btn { border: none; background: transparent; padding: 7px 16px; border-radius: 6px; font: inherit; font-weight: 600; color: var(--muted, #64748b); cursor: pointer; }
+.board-toggle-btn.active { background: var(--primary); color: #fff; }
+.bo-block .pos-sub { color: var(--primary); }
+
+/* Back office marker settings */
+.bomk-list { display: flex; flex-direction: column; gap: 8px; }
+.bomk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bomk-row .mk-chip { min-width: 34px; height: 26px; font-weight: 700; }
+.bomk-inp { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.bomk-inp[data-field="text"] { width: 130px; }
+.bomk-label { flex: 1; min-width: 150px; }
+.bomk-row .mk-color { min-width: 130px; }
+.bomk-del { width: 30px; height: 30px; border-radius: 6px; line-height: 1; padding: 0; }
+
+/* ราคาค่าเวร (สรุปเวร) — แยกกลุ่มงาน + ชนิดวัน */
+.section-band { margin: 20px 0 8px; padding: 8px 14px; border-radius: 8px; background: var(--primary); color: #fff; font-weight: 700; font-size: 14px; }
+.price-wrap { display: inline-flex; align-items: center; gap: 3px; }
+.price-cur { color: var(--muted, #64748b); font-weight: 700; }
+.pricegrp-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; border-bottom: 2px solid var(--border); }
+.pricegrp-tab { border: none; background: transparent; padding: 8px 16px; font: inherit; font-weight: 600; color: var(--muted, #64748b); cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+.pricegrp-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.price-sub-title { font-weight: 700; font-size: 13px; color: var(--primary); margin: 14px 0 6px; }
+.price-table { border-collapse: collapse; width: 100%; }
+.price-table th { text-align: center; font-size: 12px; font-weight: 600; color: var(--muted, #64748b); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.price-table th.price-mk-col { text-align: left; }
+.price-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: center; }
+.price-table td.price-mk { text-align: left; white-space: nowrap; }
+.price-table .mk-chip { min-width: 28px; height: 22px; font-weight: 700; }
+.price-name { font-size: 13px; color: var(--text, #1e293b); margin-left: 4px; }
+.rate-inp { width: 74px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 6px; font: inherit; text-align: right; }
 .cap-must-chip { cursor: pointer; }
 .cap-must-chip input { position: absolute; opacity: 0; width: 0; height: 0; }
 .cap-must-chip .mk-chip { opacity: .35; outline: 1px dashed transparent; }

@@ -47,6 +47,8 @@ const UI = {
         this.renderMarkerSettings();
         this.renderSplits();
         this.renderHolidayManager();
+        this.renderBoMarkerSettings();
+        this.renderPriceZone();
         this.renderSwapHistory();
     },
 
@@ -76,20 +78,197 @@ const UI = {
         }).join('');
     },
 
-    // ---- Schedule tab: one block per position -------------------------
+    // ---- Schedule tab: toggle [ตารางเวร | ลงเวร Back Office] then blocks per position ----
+    boardMode: (typeof localStorage !== 'undefined' && localStorage.getItem('ss_boardMode') === 'bo') ? 'bo' : 'shift',
+    setBoardMode(mode) {
+        this.boardMode = (mode === 'bo') ? 'bo' : 'shift';
+        try { localStorage.setItem('ss_boardMode', this.boardMode); } catch (e) { /* ignore */ }
+        this.closePopover();
+        this.renderScheduleTab();
+    },
+    boardToggle() {
+        return `<div class="board-toggle no-print">
+            <button class="board-toggle-btn${this.boardMode === 'shift' ? ' active' : ''}" data-mode="shift" type="button">📋 ตารางเวร</button>
+            <button class="board-toggle-btn${this.boardMode === 'bo' ? ' active' : ''}" data-mode="bo" type="button">🗂️ ลงเวร Back Office</button>
+        </div>`;
+    },
+
     renderScheduleTab() {
         const c = this.el('scheduleContainer');
+        const toggle = this.boardToggle();
+        if (this.boardMode === 'bo') {   // back office = ไม่กรองตามการเผยแพร่ (ตารางแยก บุคลากรลงเอง)
+            const positions = App.data.positions;
+            c.innerHTML = toggle + (positions.length ? positions.map(p => this.boBlock(p)).join('')
+                : '<div class="content-box empty-hint">ยังไม่มีตำแหน่ง</div>');
+            this.fitCells(c);
+            return;
+        }
         let positions = App.data.positions;
         if (App.isStaff()) {   // staff see only groups that have been published
             positions = positions.filter(p => App.posPublished(p.id));
             if (!positions.length) {
-                c.innerHTML = '<div class="content-box empty-hint">⏳ ตารางเวรยังไม่เผยแพร่ — รอผู้จัดตารางเผยแพร่ก่อน แล้วกด “⟳ ดึงล่าสุด”</div>';
+                c.innerHTML = toggle + '<div class="content-box empty-hint">⏳ ตารางเวรยังไม่เผยแพร่ — รอผู้จัดตารางเผยแพร่ก่อน แล้วกด “⟳ ดึงล่าสุด”</div>';
                 return;
             }
         }
-        if (!positions.length) { c.innerHTML = ''; return; }
-        c.innerHTML = positions.map(p => this.posBlock(p)).join('');
+        if (!positions.length) { c.innerHTML = toggle; return; }
+        c.innerHTML = toggle + positions.map(p => this.posBlock(p)).join('');
         this.fitCells(c);
+    },
+
+    // ---- Back office block: blank grid, own marker set, per-person self-entry ----
+    boBlock(pos) {
+        const staff = Schedule.staffForPos(pos.id);
+        const body = staff.length
+            ? this.buildBoTable(pos.id, staff)
+            : `<p class="pos-empty">ยังไม่มีรายชื่อตำแหน่งนี้ — เพิ่มที่แท็บ “บุคลากร”</p>`;
+        return `<div class="content-box pos-block bo-block" data-pos="${pos.id}">
+            <div class="pos-inner">
+                <div class="pos-head">
+                    <h2>${this.esc(pos.name)} <span class="pos-sub">🗂️ Back Office · ${this.monthTitle()}</span></h2>
+                    <div class="pos-actions no-print">
+                        <button class="pos-print btn-secondary" data-pos="${pos.id}" type="button">🖨 พิมพ์</button>
+                        ${App.isAdmin() ? `<button class="bo-save btn-primary" data-pos="${pos.id}" type="button" title="บันทึก+ซิงก์ขึ้น Google Sheet">💾 บันทึก</button>` : ''}
+                    </div>
+                </div>
+                <span class="table-hint no-print">คลิกช่อง = ลงเวร back office (${App.isStaff() ? 'แถวของตัวเอง' : 'ทุกคน'}) · ใส่ได้ 2/วัน${App.isStaff() ? ' · บันทึกอัตโนมัติในเครื่อง' : ''}</span>
+                ${body}
+                <div class="legend-bar no-print">
+                    <span class="legend-label">เครื่องหมาย:</span>
+                    <div class="legend">${this.buildBoLegend()}</div>
+                </div>
+            </div>
+        </div>`;
+    },
+
+    buildBoLegend() {
+        const ms = App.data.boMarkers || [];
+        if (!ms.length) return `<span class="muted-note">ยังไม่มีเครื่องหมาย back office — เพิ่มที่แท็บ “ตั้งค่าเวร” (ล่างสุด)</span>`;
+        return ms.map(m =>
+            `<span class="legend-item"><span class="mk-chip" style="background:${m.color}">${this.esc(m.text)}</span>${m.label ? `<span class="legend-text">${this.esc(m.label)}</span>` : ''}</span>`
+        ).join('');
+    },
+
+    buildBoTable(posId, staff) {
+        const { year, month } = App.data;
+        const days = Schedule.daysInMonth(year, month);
+        return `<div class="table-scroll"><table class="schedule-table bo-table" data-pos="${posId}">
+            ${this.buildHead(year, month, days)}
+            ${this.buildBoBody(year, month, days, staff)}
+        </table></div>`;
+    },
+
+    buildBoBody(year, month, days, staff) {
+        const ym = App.currentKey();
+        const rows = staff.map(s => {
+            let cells = '', cnt = 0;
+            for (let d = 1; d <= days; d++) {
+                if (App.getBoCell(ym, s.id, d).length) cnt++;
+                cells += this.boCellHtml(s.id, d, year, month);
+            }
+            const role = s.role ? `<span class="staff-role">${this.esc(s.role)}</span>` : '';
+            const mine = App.isStaff() && s.id === App.session.staffId;
+            const rowCls = [s.inactive ? 'staff-off' : '', mine ? 'row-mine' : '', (App.isStaff() && !mine) ? 'row-locked' : '']
+                .filter(Boolean).join(' ');
+            return `<tr data-staff="${s.id}"${rowCls ? ` class="${rowCls}"` : ''}>
+                <td class="staff-col"><span class="staff-name" title="${this.esc(s.name)}">${this.esc(s.name)}</span>${role}</td>
+                ${cells}
+                <td class="sum-col total-col"><b>${cnt || ''}</b></td>
+            </tr>`;
+        }).join('');
+        return `<tbody>${rows}</tbody>`;
+    },
+
+    boCellHtml(staffId, day, year, month) {
+        const we = Schedule.isWeekend(year, month, day) ? ' weekend' : '';
+        const hc = Holidays.get(year, month, day) ? ' holiday' : '';
+        return `<td class="cell bo-cell${we}${hc}" data-staff="${staffId}" data-day="${day}">${this.boCellInner(staffId, day)}</td>`;
+    },
+
+    boCellInner(staffId, day) {
+        const ids = App.getBoCell(App.currentKey(), staffId, day);
+        if (!ids.length) return '';
+        const chips = ids.map(id => {
+            const m = App.getBoMarker(id);
+            return m ? `<span class="mk-chip" style="background:${m.color}">${this.esc(m.text)}</span>` : '';
+        }).join('');
+        return `<span class="cell-fit">${chips}</span>`;
+    },
+
+    // ---- Back office cell popover (reuses #cellPopover DOM · editing.bo = true) ----
+    openBoPopover(td) {
+        const staffId = td.dataset.staff;
+        const day = parseInt(td.dataset.day, 10);
+        const staff = App.data.staff.find(s => s.id === staffId);
+        if (!staff || staff.inactive) return;
+        if (App.isStaff() && staff.id !== App.session.staffId) return;   // บุคลากรเติมแถวตัวเอง
+        this.editing = { staffId, day, posId: staff.pos, cell: td, bo: true };
+        this.renderBoPopover();
+        this.positionPopover(td);
+    },
+
+    renderBoPopover() {
+        if (!this.editing) return;
+        const { staffId, day } = this.editing;
+        const arr = App.getBoCell(App.currentKey(), staffId, day);
+        const staff = App.data.staff.find(s => s.id === staffId);
+        const markers = App.data.boMarkers || [];
+        const full = arr.length >= 2;
+        const current = arr.length
+            ? arr.map((id, idx) => {
+                const m = App.getBoMarker(id);
+                return `<span class="cp-chip" style="background:${m ? m.color : '#eee'}">${m ? this.esc(m.text) : '?'}<button class="cp-del" data-idx="${idx}" title="เอาออก">×</button></span>`;
+            }).join('')
+            : `<span class="muted-note">— ว่าง —</span>`;
+        const picks = markers.length
+            ? markers.map(m => {
+                const dis = full || arr.includes(m.id) ? ' disabled' : '';
+                return `<button class="cp-pick" data-id="${m.id}"${dis} style="background:${m.color}" title="${this.esc(m.label || m.text)}">${this.esc(m.text) || '·'}</button>`;
+            }).join('')
+            : '<span class="muted-note">ยังไม่มีเครื่องหมาย back office — เพิ่มที่ “ตั้งค่าเวร” (ล่างสุด)</span>';
+        this.el('cellPopover').innerHTML = `
+            <div class="cp-head"><span class="cp-title">${this.esc(staff ? staff.name : '')} · วันที่ ${day} · Back Office${full ? ' <span class="cp-full">(ครบ 2)</span>' : ''}</span><button class="cp-x" type="button" title="ปิด">×</button></div>
+            <div class="cp-current">${current}</div>
+            <div class="cp-pick-wrap">${picks}</div>
+            <div class="cp-foot"><button class="cp-clear" type="button">ลบทั้งหมด</button><button class="cp-close" type="button">เสร็จ</button></div>`;
+    },
+
+    addBoToCell(markerId) {
+        if (!this.editing) return;
+        const { staffId, day } = this.editing;
+        const arr = App.getBoCell(App.currentKey(), staffId, day);
+        if (arr.length >= 2 || arr.includes(markerId)) return;
+        arr.push(markerId);
+        App.setBoCell(App.currentKey(), staffId, day, arr);
+        this.afterBoChange();
+    },
+    removeBoFromCell(idx) {
+        if (!this.editing) return;
+        const { staffId, day } = this.editing;
+        const arr = App.getBoCell(App.currentKey(), staffId, day);
+        arr.splice(idx, 1);
+        App.setBoCell(App.currentKey(), staffId, day, arr);
+        this.afterBoChange();
+    },
+    clearBoCell() {
+        if (!this.editing) return;
+        const { staffId, day } = this.editing;
+        App.setBoCell(App.currentKey(), staffId, day, []);
+        this.afterBoChange();
+    },
+    afterBoChange() {
+        const { staffId, day, posId } = this.editing;
+        const table = this.el('scheduleContainer').querySelector(`table.bo-table[data-pos="${posId}"]`);
+        if (table) {
+            const td = table.querySelector(`td.bo-cell[data-staff="${staffId}"][data-day="${day}"]`);
+            if (td) td.innerHTML = this.boCellInner(staffId, day);
+            const ym = App.currentKey(), days = Schedule.daysInMonth(App.data.year, App.data.month);
+            let cnt = 0; for (let d = 1; d <= days; d++) if (App.getBoCell(ym, staffId, d).length) cnt++;
+            const tb = table.querySelector(`tr[data-staff="${staffId}"] .total-col b`);
+            if (tb) tb.textContent = cnt || '';
+            this.fitCells(table);
+        }
+        this.renderBoPopover();
     },
 
     posBlock(pos) {
@@ -193,19 +372,28 @@ const UI = {
         if (!ids.length) return '';
         const staff = App.data.staff.find(s => s.id === staffId);
         const dup = staff ? Schedule.dupMarkersOnDay(staff.pos, day) : null;
-        // always show เวรเช้า on the left, เวรบ่าย on the right (others in the middle)
+        // เรียง: ด ซ้ายสุด → เช้า/กลางวัน → บ่าย → x ขวาสุด (เช่น อา: ด smc บ · ธรรมดา: smc x)
         const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
-        const orderKey = id => { const m = App.getMarker(id); if (!m) return 1; const f = App.slotFlags(m, cat); return f.afternoon ? 2 : f.morning ? 0 : 1; };
+        const orderKey = id => {
+            const m = App.getMarker(id);
+            if (!m) return 3;
+            if (App.isNoAfternoonMarker(m)) return 5;   // x → ขวาสุด
+            const f = App.slotFlags(m, cat);
+            if (f.night) return 0;                        // ด → ซ้ายสุด
+            if (f.morning) return 1;                      // เช้า/กลางวัน (smc เสาร์-อาทิตย์)
+            if (f.afternoon) return 2;                    // บ่าย (smc วันธรรมดา)
+            return 3;
+        };
         const chips = ids.slice().sort((a, b) => orderKey(a) - orderKey(b)).map(id => {
             const m = App.getMarker(id);
             if (!m) return '';
             const isDup = dup && dup.has(id);
             return `<span class="mk-chip${isDup ? ' dup' : ''}" style="background:${m.color}"${isDup ? ' title="เวรซ้ำกับคนอื่นในวันนี้"' : ''}>${this.markerInner(m)}</span>`;
         }).join('');
-        return `<span class="cell-fit">${chips}</span>`;   // wrapper ให้ auto-fit ย่อพอดีช่อง
+        return `<span class="cell-fit${ids.length >= 3 ? ' wrap' : ''}">${chips}</span>`;   // ≥3 เวร → พับ 2 แถว · 1-2 เวร → แถวเดียว (auto-fit ย่อ)
     },
 
-    // auto-shrink each cell's content so it never spills past the cell edge (per-cell scale — sizes may differ)
+    // เวรหลายตัวจะ wrap เป็น 2 แถวเอง (flex-wrap + ช่องสูง auto) — fit นี้ย่อเฉพาะกรณี chip เดียวกว้างเกินช่องจริง ๆ
     fitCells(scope) {
         const root = scope || this.el('scheduleContainer');
         if (!root) return;
@@ -214,7 +402,7 @@ const UI = {
         fits.forEach(f => { f.style.transform = ''; });               // reset to natural size
         const scales = fits.map(f => {                                // batch READ (single layout)
             const avail = f.parentElement.clientWidth - 2, w = f.scrollWidth;
-            return (w > avail && avail > 0) ? Math.max(0.4, avail / w) : 1;
+            return (w > avail + 3 && avail > 0) ? Math.max(0.4, avail / w) : 1;   // +3 กัน wrap พอดีช่องแล้วโดนย่อจิ๋ว
         });
         fits.forEach((f, i) => { if (scales[i] < 1) f.style.transform = `scale(${scales[i].toFixed(3)})`; });   // batch WRITE
     },
@@ -273,7 +461,11 @@ const UI = {
         if (App.isStaff() && !App.posPublished(staff.pos)) return;       // เดือน/กลุ่มที่ยังไม่เผยแพร่ — แก้/แลกไม่ได้
         this.editing = { staffId, day, posId: staff.pos, cell: td };
         this.renderPopover();
+        this.positionPopover(td);
+    },
 
+    // place the shared cellPopover under (or above) a cell, clamped to the viewport
+    positionPopover(td) {
         const pop = this.el('cellPopover');
         pop.hidden = false;
         const r = td.getBoundingClientRect();
@@ -302,18 +494,20 @@ const UI = {
             }).join('')
             : `<span class="muted-note">— ว่าง —</span>`;
 
-        const full = arr.length >= 2;
+        const staffFree = App.isStaff();   // หน้าแลกเปลี่ยน: ลงอิสระ (ไม่จำกัดเวร/วัน + ไม่เช็คคู่ชน)
+        const cap = staffFree ? App.MAX_CELL : 2;
+        const full = arr.length >= cap;
         const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
-        const existing = arr.length === 1 ? App.getMarker(arr[0]) : null;
+        const existing = (!staffFree && arr.length === 1) ? App.getMarker(arr[0]) : null;
         const picks = markers.map(m => {
-            const conflict = existing ? App.pairConflict(existing, m, cat) : false;
+            const conflict = existing ? this.cellPairBlocked(staff, existing, m, cat) : false;
             const dis = full || arr.includes(m.id) || conflict ? ' disabled' : '';
             const tip = conflict ? this.conflictReason(existing, m, cat) : (m.label || m.text);
             return `<button class="cp-pick" data-id="${m.id}"${dis} style="background:${m.color}" title="${this.esc(tip)}">${this.markerInner(m)}</button>`;
         }).join('');
 
         this.el('cellPopover').innerHTML = `
-            <div class="cp-head"><span class="cp-title">${this.esc(staff ? staff.name : '')} · วันที่ ${day}${full ? ' <span class="cp-full">(ครบ 2 แล้ว)</span>' : ''}</span><button class="cp-x" type="button" title="ปิด">×</button></div>
+            <div class="cp-head"><span class="cp-title">${this.esc(staff ? staff.name : '')} · วันที่ ${day}${full ? ` <span class="cp-full">(ครบ ${cap} แล้ว)</span>` : ''}</span><button class="cp-x" type="button" title="ปิด">×</button></div>
             <div class="cp-current">${current}</div>
             <div class="cp-pick-wrap">${picks || '<span class="muted-note">ไม่มีเครื่องหมาย</span>'}</div>
             <div class="cp-foot">
@@ -321,6 +515,17 @@ const UI = {
                 <button class="cp-clear" type="button">ลบทั้งหมด</button>
                 <button class="cp-close" type="button">เสร็จ</button>
             </div>`;
+    },
+
+    // ปลดล็อกคู่เวรเฉพาะหน้าแก้เซลล์/แลกเปลี่ยน ตามความสามารถของคน (ตัวสุ่มยังใช้ App.pairConflict ตรง ๆ — บล็อกเหมือนเดิม):
+    //   nightMorning   = ลง ด (เลิก 08:00) ต่อเช้าได้ → ปลด ด+เช้า
+    //   afternoonNight = ลงบ่ายต่อดึกได้ → ปลด x+บ่าย (x = วันก่อนขึ้นดึก)
+    cellPairBlocked(staff, a, b, cat) {
+        if (!App.pairConflict(a, b, cat)) return false;
+        const xAfternoon = (App.isNoAfternoonMarker(a) && App.slotFlags(b, cat).afternoon)
+            || (App.isNoAfternoonMarker(b) && App.slotFlags(a, cat).afternoon);
+        if (xAfternoon) return !(staff && staff.afternoonNight);   // คู่ x+บ่าย
+        return !(staff && staff.nightMorning);                     // คู่ ด+เช้า/กลางวัน (ที่เหลือ)
     },
 
     // a is the marker already in the cell, b is the one being added
@@ -335,9 +540,14 @@ const UI = {
         if (!this.editing) return;
         const { staffId, day } = this.editing;
         const arr = App.getCell(staffId, day);
-        if (arr.length >= 2 || arr.includes(markerId)) return;
-        const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
-        if (arr.length === 1 && App.pairConflict(App.getMarker(arr[0]), App.getMarker(markerId), cat)) return;
+        const staffFree = App.isStaff();   // หน้าแลกเปลี่ยน: ลงอิสระ ไม่จำกัดเวร/วัน + ไม่เช็คคู่ชน
+        const cap = staffFree ? App.MAX_CELL : 2;
+        if (arr.length >= cap || arr.includes(markerId)) return;
+        if (!staffFree && arr.length === 1) {
+            const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
+            const staff = App.data.staff.find(s => s.id === staffId);
+            if (this.cellPairBlocked(staff, App.getMarker(arr[0]), App.getMarker(markerId), cat)) return;
+        }
         arr.push(markerId);
         App.setCell(staffId, day, arr);
         this.autoLinkNight(markerId);
@@ -365,10 +575,13 @@ const UI = {
         if (!tgt) return;
         const { staffId, posId } = this.editing;
         const tArr = App.getCellIn(tgt.key, staffId, tgt.day);
-        if (tArr.includes(tgt.partner.id) || tArr.length >= 2) return;
+        if (tArr.includes(tgt.partner.id) || tArr.length >= App.MAX_CELL) return;
         const [ty, tm] = tgt.key.split('-').map(Number);
         const tCat = Schedule.dayCategory(ty, tm, tgt.day);
-        if (tArr.length === 1 && App.pairConflict(App.getMarker(tArr[0]), tgt.partner, tCat)) return;
+        // บ่ายต่อดึก: วันก่อนขึ้นดึกมีเวรบ่ายอยู่แล้ว → ไม่เติม x (x แค่กันเวรมาต่อ · ไม่นับเป็นเวร)
+        if (App.isNoAfternoonMarker(tgt.partner) && tArr.some(id => App.slotFlags(App.getMarker(id), tCat).afternoon)) return;
+        const staff = App.data.staff.find(s => s.id === staffId);
+        if (tArr.length === 1 && this.cellPairBlocked(staff, App.getMarker(tArr[0]), tgt.partner, tCat)) return;
         tArr.push(tgt.partner.id);
         App.setCellIn(tgt.key, staffId, tgt.day, tArr);
         if (tgt.key === App.currentKey()) this.refreshCell(staffId, tgt.day, posId);
@@ -458,9 +671,20 @@ const UI = {
 
     afterCellChange() {
         const { staffId, day, posId } = this.editing;
+        this.stripRedundantX(staffId, day);   // บ่ายต่อดึก: มีทั้ง x และบ่ายในช่อง → เอา x ออก (ด วันถัดไปคงเดิม)
         this.refreshCell(staffId, day, posId);
         this.renderPopover();
         if (App.isStaff()) { Auth._unsavedSwap = true; this.setSwapStatus('● แก้ไขแล้ว — กด 💾 บันทึกการแลกเวร', 'warn'); }
+    },
+
+    // เอา x ออกจากช่องที่มีเวรบ่าย (บ่ายต่อดึก) — x มีไว้กันเวรมาต่อเท่านั้น ไม่นับเป็นเวร · ด วันถัดไปยังอยู่
+    stripRedundantX(staffId, day) {
+        const arr = App.getCell(staffId, day);
+        if (arr.length < 2) return;
+        const cat = Schedule.dayCategory(App.data.year, App.data.month, day);
+        if (!arr.some(id => App.slotFlags(App.getMarker(id), cat).afternoon)) return;
+        const cleaned = arr.filter(id => !App.isNoAfternoonMarker(App.getMarker(id)));
+        if (cleaned.length !== arr.length) App.setCell(staffId, day, cleaned);
     },
 
     setSwapStatus(msg, kind) {
@@ -791,7 +1015,9 @@ const UI = {
                 <div class="cap-ban"><span class="cap-ban-lbl">ห้ามวัน:</span>${dowChips}</div>
             </div>`;
         }).join('');
-        wrap.innerHTML = `<div class="cap-must-row"><span class="cap-must-lbl">ต้องได้ ≥1 เวร/เดือน:</span>${mustChips}</div>${rows}`;
+        const nmRow = `<label class="cap-nm-row"><input type="checkbox" class="cap-nightmorning"${s.nightMorning ? ' checked' : ''}><span>ลง ด แล้วต่อเวรเช้าได้ (เลิกดึก 08:00 → เช้า)</span><small class="cap-nm-hint">หน้าแลกเปลี่ยนจะไม่ล็อก ด+เช้า · ตัวสุ่มยังไม่จับคู่ให้</small></label>`;
+        const anRow = `<label class="cap-nm-row"><input type="checkbox" class="cap-afternoonnight"${s.afternoonNight ? ' checked' : ''}><span>ลงบ่ายต่อดึกได้ (บ่าย → ขึ้นดึก)</span><small class="cap-nm-hint">หน้าแลกเปลี่ยนจะไม่ล็อก x+บ่าย (วันก่อนขึ้นดึก) · ตัวสุ่มยังห้ามเหมือนเดิม</small></label>`;
+        wrap.innerHTML = `${nmRow}${anRow}<div class="cap-must-row"><span class="cap-must-lbl">ต้องได้ ≥1 เวร/เดือน:</span>${mustChips}</div>${rows}`;
     },
     closeCapModal() {
         const m = this.el('capModal'); if (!m || m.hidden) return;
@@ -905,6 +1131,65 @@ const UI = {
                 return `<div class="holiday-item"><span>${parseInt(dd, 10)} ${Schedule.MONTH_NAMES[parseInt(mm, 10) - 1]} ${y} — ${this.esc(ch[y][k])}</span><button class="del-holiday" data-year="${y}" data-key="${k}" title="ลบ">×</button></div>`;
             }).join('')
         ).join('');
+    },
+
+    // ---- Back office marker settings (own set, admin-defined) ----
+    renderBoMarkerSettings() {
+        const wrap = this.el('boMarkerList');
+        if (!wrap) return;
+        const ms = App.data.boMarkers || [];
+        if (!ms.length) {
+            wrap.innerHTML = '<span class="muted-note">ยังไม่มีเครื่องหมาย back office — กด “+ เพิ่มเครื่องหมาย” แล้วกำหนดข้อความ/สี/ความหมายเอง</span>';
+            return;
+        }
+        wrap.innerHTML = ms.map(m => {
+            const colorSel = App.PRESET_COLORS.map(c => `<option value="${c.hex}"${m.color === c.hex ? ' selected' : ''}>${c.name}</option>`).join('');
+            return `<div class="bomk-row" data-id="${m.id}">
+                <span class="mk-chip" style="background:${m.color}">${this.esc(m.text) || '·'}</span>
+                <input class="bomk-inp" data-field="text" value="${this.esc(m.text)}" placeholder="โค้ด เช่น BO, ผลิต">
+                <input class="bomk-inp bomk-label" data-field="label" value="${this.esc(m.label || '')}" placeholder="ความหมาย (ไม่บังคับ)">
+                <select class="bomk-inp mk-color" data-field="color" style="background:${m.color}">${colorSel}</select>
+                <button class="bomk-del btn-danger" data-id="${m.id}" title="ลบ">×</button>
+            </div>`;
+        }).join('');
+    },
+
+    // ---- ราคาค่าเวร แยกตามกลุ่มงาน (แท็บ) + ชนิดวัน (ธรรมดา/เสาร์-อาทิตย์/หยุดราชการ) · เตรียมสรุปเวร ----
+    PRICE_CATS: [['weekday', 'ธรรมดา'], ['weekend', 'เสาร์-อาทิตย์'], ['pubhol', 'หยุดราชการ']],
+    priceGroup: null,
+    rateVal(prices, posId, cat) { const v = prices && prices[posId] && prices[posId][cat]; return (v === 0 || v) ? v : ''; },
+
+    renderPriceZone() {
+        const wrap = this.el('priceZone');
+        if (!wrap) return;
+        const positions = App.data.positions || [];
+        if (!positions.length) { wrap.innerHTML = '<span class="muted-note">ยังไม่มีกลุ่มงาน — เพิ่มที่ “🏷️ ตำแหน่ง” ด้านบน</span>'; return; }
+        if (!this.priceGroup || !positions.find(p => p.id === this.priceGroup)) this.priceGroup = positions[0].id;
+        const posId = this.priceGroup;
+        const tabs = positions.map(p => `<button class="pricegrp-tab${p.id === posId ? ' active' : ''}" data-pos="${p.id}" type="button">${this.esc(p.name)}</button>`).join('');
+        const head = `<tr><th class="price-mk-col">เครื่องหมาย</th>${this.PRICE_CATS.map(c => `<th>${c[1]}</th>`).join('')}</tr>`;
+        const bo = App.data.boMarkers || [];
+        const boRows = bo.length ? bo.map(m => this.priceRow('bo', m, posId)).join('')
+            : `<tr><td colspan="4" class="muted-note">ยังไม่มีเครื่องหมาย back office (เพิ่มด้านบน)</td></tr>`;
+        const mk = Schedule.markersForPos(posId);
+        const mkRows = mk.length ? mk.map(m => this.priceRow('mk', m, posId)).join('')
+            : `<tr><td colspan="4" class="muted-note">กลุ่มนี้ยังไม่มีเครื่องหมายเวร</td></tr>`;
+        wrap.innerHTML = `
+            <div class="pricegrp-tabs">${tabs}</div>
+            <div class="price-sub-title">🗂️ เวร Back Office</div>
+            <div class="table-scroll"><table class="price-table">${head}${boRows}</table></div>
+            <div class="price-sub-title">💰 เวรปกติ (จากการสุ่ม)</div>
+            <div class="table-scroll"><table class="price-table">${head}${mkRows}</table></div>`;
+    },
+
+    priceRow(kind, m, posId) {
+        const inner = kind === 'bo' ? (this.esc(m.text) || '·') : this.markerInner(m);
+        const name = m.label ? `<span class="price-name">${this.esc(m.label)}</span>` : '';
+        const chip = `<span class="mk-chip" style="background:${m.color}">${inner}</span>${name}`;
+        const cells = this.PRICE_CATS.map(c =>
+            `<td><label class="price-wrap"><span class="price-cur">฿</span><input class="rate-inp" data-kind="${kind}" data-id="${m.id}" data-cat="${c[0]}" type="number" min="0" step="1" value="${this.rateVal(m.prices, posId, c[0])}" placeholder="0"></label></td>`
+        ).join('');
+        return `<tr data-id="${m.id}"><td class="price-mk">${chip}</td>${cells}</tr>`;
     },
 
     esc(s) {

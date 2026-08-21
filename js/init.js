@@ -98,6 +98,10 @@
     });
     UI.el('capMarkers').addEventListener('change', e => {
         if (!UI.editingCapStaff) return;
+        const nmk = e.target.closest('.cap-nightmorning');
+        if (nmk) { const s = App.data.staff.find(x => x.id === UI.editingCapStaff); if (s) { s.nightMorning = nmk.checked; App.save(); } return; }
+        const ank = e.target.closest('.cap-afternoonnight');
+        if (ank) { const s = App.data.staff.find(x => x.id === UI.editingCapStaff); if (s) { s.afternoonNight = ank.checked; App.save(); } return; }
         const chk = e.target.closest('.cap-chk');
         if (chk) { App.setBlockedMarker(UI.editingCapStaff, chk.dataset.marker, !chk.checked); UI.renderCapMarkers(); return; }
         const must = e.target.closest('.cap-must-chk');
@@ -153,6 +157,11 @@
     const container = UI.el('scheduleContainer');
 
     container.addEventListener('click', e => {
+        // toggle: ตารางเวร ↔ ลงเวร Back Office
+        const bt = e.target.closest('.board-toggle-btn');
+        if (bt) { e.stopPropagation(); UI.setBoardMode(bt.dataset.mode); return; }
+        const bosv = e.target.closest('.bo-save');
+        if (bosv) { e.stopPropagation(); Auth.pushSave(); return; }
         // per-position action buttons in the table header
         const dt = e.target.closest('.draft-tab');
         if (dt) { e.stopPropagation(); App.setActiveDraft(dt.dataset.pos, parseInt(dt.dataset.draft, 10)); UI.renderScheduleTab(); return; }
@@ -174,7 +183,9 @@
         const unpub = e.target.closest('.pos-unpublish');
         if (unpub) { e.stopPropagation(); Auth.unpublishPos(unpub.dataset.pos); return; }
         const dayHead = e.target.closest('th.day-col');
-        if (dayHead && App.isAdmin()) { UI.openHolidayModal(dayHead); return; }
+        if (dayHead && App.isAdmin() && UI.boardMode !== 'bo') { UI.openHolidayModal(dayHead); return; }
+        const boCell = e.target.closest('td.bo-cell');
+        if (boCell) { UI.openBoPopover(boCell); e.stopPropagation(); return; }
         const cell = e.target.closest('td.cell');
         if (cell) { UI.openCellPopover(cell); e.stopPropagation(); }
     });
@@ -183,12 +194,13 @@
     const popover = UI.el('cellPopover');
     popover.addEventListener('click', e => {
         e.stopPropagation();
+        const bo = UI.editing && UI.editing.bo;
         const pick = e.target.closest('.cp-pick');
-        if (pick && !pick.disabled) { UI.addToCell(pick.dataset.id); return; }
+        if (pick && !pick.disabled) { bo ? UI.addBoToCell(pick.dataset.id) : UI.addToCell(pick.dataset.id); return; }
         const del = e.target.closest('.cp-del');
-        if (del) { UI.removeFromCell(parseInt(del.dataset.idx, 10)); return; }
+        if (del) { bo ? UI.removeBoFromCell(parseInt(del.dataset.idx, 10)) : UI.removeFromCell(parseInt(del.dataset.idx, 10)); return; }
         if (e.target.closest('.cp-pin')) { UI.togglePin(); return; }
-        if (e.target.closest('.cp-clear')) { UI.clearCell(); return; }
+        if (e.target.closest('.cp-clear')) { bo ? UI.clearBoCell() : UI.clearCell(); return; }
         if (e.target.closest('.cp-x')) { UI.closePopover(); return; }
         if (e.target.closest('.cp-close')) { UI.closePopover(); return; }
     });
@@ -477,5 +489,53 @@
         App.removeHoliday(parseInt(del.dataset.year, 10), del.dataset.key);
         UI.renderHolidayManager();
         UI.renderScheduleTab();
+    });
+
+    // --- Back office marker settings ---
+    const boList = UI.el('boMarkerList');
+    const parsePrice = v => v === '' ? '' : (Number(v) >= 0 ? Number(v) : 0);
+    function onBoMarkerEdit(e) {
+        const inp = e.target.closest('.bomk-inp');
+        if (!inp) return;
+        const row = inp.closest('.bomk-row');
+        const id = row.dataset.id, field = inp.dataset.field;
+        App.updateBoMarker(id, { [field]: inp.value });
+        const chip = row.querySelector('.mk-chip');
+        const m = App.getBoMarker(id);
+        if (chip && m) { chip.style.background = m.color; chip.textContent = m.text || '·'; }
+        if (field === 'color') { inp.style.background = inp.value; UI.renderScheduleTab(); }
+        if (field === 'text') UI.renderScheduleTab();
+    }
+    boList.addEventListener('input', onBoMarkerEdit);
+    boList.addEventListener('change', onBoMarkerEdit);
+    boList.addEventListener('click', e => {
+        const del = e.target.closest('.bomk-del');
+        if (!del) return;
+        const m = App.getBoMarker(del.dataset.id);
+        if (m && confirm(`ลบเครื่องหมาย back office "${m.text || m.label || ''}" และล้างช่องที่ใช้เครื่องหมายนี้?`)) {
+            App.removeBoMarker(del.dataset.id);
+            UI.renderBoMarkerSettings();
+            UI.renderScheduleTab();
+        }
+    });
+    UI.el('addBoMarkerBtn').addEventListener('click', () => {
+        const id = App.addBoMarker();
+        UI.renderBoMarkerSettings();
+        const inp = document.querySelector(`#boMarkerList .bomk-row[data-id="${id}"] .bomk-inp[data-field="text"]`);
+        if (inp) inp.focus();
+    });
+
+    // --- ราคาค่าเวร (แยกกลุ่มงาน + ชนิดวัน) ---
+    const priceZone = UI.el('priceZone');
+    priceZone.addEventListener('input', e => {
+        const inp = e.target.closest('.rate-inp');
+        if (!inp) return;
+        const val = parsePrice(inp.value);
+        if (inp.dataset.kind === 'bo') App.setBoMarkerRate(inp.dataset.id, UI.priceGroup, inp.dataset.cat, val);
+        else App.setMarkerRate(inp.dataset.id, UI.priceGroup, inp.dataset.cat, val);
+    });
+    priceZone.addEventListener('click', e => {
+        const tab = e.target.closest('.pricegrp-tab');
+        if (tab) { UI.priceGroup = tab.dataset.pos; UI.renderPriceZone(); }
     });
 })();

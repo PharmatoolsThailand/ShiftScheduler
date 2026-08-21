@@ -1,6 +1,7 @@
 // Data model + localStorage persistence. Single shared global: App
 const App = {
     STORAGE_KEY: 'detudom_shift_scheduler_v1',
+    MAX_CELL: 4,   // เพดานจำนวนเวรต่อช่อง (หน้าแลกเปลี่ยนลงอิสระได้ถึงเท่านี้ · ตารางหลัก/สุ่มยังคุมที่ 2 เอง)
 
     data: {
         unit: '',
@@ -25,7 +26,9 @@ const App = {
         swapLog: {},            // { 'YYYY-MM': [{ day, staffId, byName, before:[ids], after:[ids], at }] } — staff shift-swap history (appended by backend)
         locks: {},              // { 'YYYY-MM': { staffId: [dayNumbers] } } — cells set manually by admin → preserved (not re-randomized), shared across drafts
         activeDraft: {},        // { posId: 1|2|3 } — draft ร่างสุ่มที่แต่ละตำแหน่งเลือกดู/แก้ (วันลา+pin ใช้ร่วมทุกร่าง)
-        publishedPos: {}        // { posId: 'timestamp' } — เผยแพร่แยกต่อกลุ่ม/ตำแหน่ง (เจ้าหน้าที่เห็นเฉพาะกลุ่มที่เผยแพร่)
+        publishedPos: {},       // { posId: 'timestamp' } — เผยแพร่แยกต่อกลุ่ม/ตำแหน่ง (เจ้าหน้าที่เห็นเฉพาะกลุ่มที่เผยแพร่)
+        boMarkers: [],          // [{ id, text, color, label }] — เครื่องหมายเวร back office (ชุดแยกจากเวรหลัก · ผู้ใช้กำหนดเอง)
+        backoffice: {}          // { 'YYYY-MM': { staffId: { day: [boMarkerIds] } } } — เวรเบิก back office (บุคลากรลงเอง ไม่เกี่ยวการสุ่ม)
     },
 
     // ---- session (role login, not synced) ----
@@ -290,6 +293,56 @@ const App = {
         this.save();
     },
 
+    // ---- Back office: เครื่องหมายชุดแยก + ตารางเบิกเวร (บุคลากรลงเอง ไม่ยุ่งการสุ่ม/เผยแพร่) ----
+    getBoMarker(id) { return (this.data.boMarkers || []).find(m => m.id === id) || null; },
+    addBoMarker() {
+        const id = 'bo' + Date.now() + Math.floor(Math.random() * 1000);
+        if (!this.data.boMarkers) this.data.boMarkers = [];
+        this.data.boMarkers.push({ id, text: '', color: this.DEFAULT_COLOR, label: '' });
+        this.save();
+        return id;
+    },
+    updateBoMarker(id, patch) { const m = this.getBoMarker(id); if (m) { Object.assign(m, patch); this.save(); } },
+    removeBoMarker(id) {
+        this.data.boMarkers = (this.data.boMarkers || []).filter(m => m.id !== id);
+        Object.values(this.data.backoffice || {}).forEach(month => Object.values(month).forEach(days => {
+            Object.keys(days).forEach(d => {
+                const kept = (Array.isArray(days[d]) ? days[d] : [days[d]]).filter(x => x !== id);
+                if (kept.length) days[d] = kept; else delete days[d];
+            });
+        }));
+        this.save();
+    },
+
+    getBoCell(ymKey, staffId, day) {
+        const m = this.data.backoffice && this.data.backoffice[ymKey] && this.data.backoffice[ymKey][staffId];
+        const v = m && m[day];
+        return Array.isArray(v) ? v.slice() : (v ? [v] : []);
+    },
+    setBoCell(ymKey, staffId, day, ids) {
+        if (!this.data.backoffice) this.data.backoffice = {};
+        if (!this.data.backoffice[ymKey]) this.data.backoffice[ymKey] = {};
+        const m = this.data.backoffice[ymKey];
+        if (!m[staffId]) m[staffId] = {};
+        if (ids && ids.length) m[staffId][day] = ids.slice(0, 2); else delete m[staffId][day];
+        this.save();
+    },
+
+    // ราคาค่าเวร แยกตาม กลุ่มงาน (posId) + ชนิดวัน (cat: 'weekday'|'weekend'|'pubhol') — เตรียมสรุปยอด (marker + boMarker ใช้ร่วมกัน)
+    rateOf(m, posId, cat) {
+        const p = m && m.prices && m.prices[posId], v = p && p[cat];
+        return (v === 0 || v) ? Number(v) : 0;
+    },
+    _setRate(m, posId, cat, val) {
+        if (!m) return;
+        if (!m.prices) m.prices = {};
+        if (!m.prices[posId]) m.prices[posId] = {};
+        if (val === '' || val == null) delete m.prices[posId][cat]; else m.prices[posId][cat] = val;
+        this.save();
+    },
+    setMarkerRate(id, posId, cat, val) { this._setRate(this.getMarker(id), posId, cat, val); },
+    setBoMarkerRate(id, posId, cat, val) { this._setRate(this.getBoMarker(id), posId, cat, val); },
+
     ymKey(year, month) {
         return year + '-' + String(month).padStart(2, '0');
     },
@@ -437,6 +490,23 @@ const App = {
         });
     },
 
+    // LIVE (แลกแล้ว) cell ของวันในเดือนก่อน: การแลก (swapOverlay) ทับตารางที่เผยแพร่ (publishedSchedules) — คนไม่แลกก็เท่าตารางเผยแพร่
+    liveCellPrevMonth(staffId, eveYear, eveMonth, day) {
+        const pk = this.ymKey(eveYear, eveMonth);
+        const ov = this.data.swapOverlay && this.data.swapOverlay[pk] && this.data.swapOverlay[pk][staffId];
+        const src = ov || (this.data.publishedSchedules && this.data.publishedSchedules[pk] && this.data.publishedSchedules[pk][staffId]);
+        const v = src && src[day];
+        return Array.isArray(v) ? v.slice() : (v ? [v] : []);
+    },
+
+    // เวรบ่ายในวันนั้นของเดือนก่อน (ตารางที่แลกแล้ว) — ใช้กัน ดึกวันที่ 1 ชน บ่ายวันสุดท้ายเดือนก่อน (x ก่อนดึกจะทับบ่าย)
+    prevMonthHasAfternoon(staffId, eve) {
+        const ids = this.liveCellPrevMonth(staffId, eve.year, eve.month, eve.day);
+        if (!ids.length) return false;
+        const cat = Schedule.dayCategory(eve.year, eve.month, eve.day);
+        return ids.some(id => this.slotFlags(this.getMarker(id), cat).afternoon);
+    },
+
     // Assignment map for the active month (created lazily)
     currentSchedule() {
         const key = this.currentKey();
@@ -472,7 +542,7 @@ const App = {
         if (!this.data.schedules[ymKey]) this.data.schedules[ymKey] = {};
         const m = this.data.schedules[ymKey];
         if (!m[staffId]) m[staffId] = {};
-        if (ids && ids.length) m[staffId][day] = ids.slice(0, 2);
+        if (ids && ids.length) m[staffId][day] = ids.slice(0, this.MAX_CELL);
         else delete m[staffId][day];
         this.save();
     },
@@ -483,7 +553,7 @@ const App = {
         if (!this.data.schedules[store]) this.data.schedules[store] = {};
         const m = this.data.schedules[store];
         if (!m[staffId]) m[staffId] = {};
-        if (ids && ids.length) m[staffId][day] = ids.slice(0, 2);
+        if (ids && ids.length) m[staffId][day] = ids.slice(0, this.MAX_CELL);
         else delete m[staffId][day];
         this.save();
     },
@@ -795,9 +865,9 @@ const App = {
     },
 
     // staff: "ตารางบุคลากร" = ตารางที่เผยแพร่ (publishedSchedules) + การแลก (overlay) — แยกจากร่าง 1-3 ของ admin
-    // admin: ไม่แตะ → เห็นร่าง 1-3 ตามที่จัด (การแลกของ staff ไม่มายุ่ง)
+    // admin: ไม่แตะร่าง → เห็นร่าง 1-3 ตามที่จัด · แต่เก็บ swapOverlay ไว้ (ให้ตัวสุ่มอ่านเวรบ่ายวันสุดท้ายเดือนก่อนจากตารางที่แลกแล้ว)
     applySwapOverlay() {
-        if (!this.isStaff()) { this.data.swapOverlay = null; return; }
+        if (!this.isStaff()) return;
         const pub = this.data.publishedSchedules || {}, ov = this.data.swapOverlay || {};
         Object.keys(pub).forEach(ym => { this.data.schedules[ym] = JSON.parse(JSON.stringify(pub[ym] || {})); });   // เริ่มจากสำเนาตารางเผยแพร่
         Object.keys(ov).forEach(ym => {
@@ -818,6 +888,8 @@ const App = {
             this.data.month = now.getMonth() + 1;
         }
         if (!this.data.positions || !this.data.positions.length) this.seedPositions();
+        if (!this.data.boMarkers) this.data.boMarkers = [];
+        if (!this.data.backoffice) this.data.backoffice = {};
         if (!this.data.workplaces) this.seedWorkplaces();
         this.data.workplaces.forEach(w => { if (!w.noNightDows) w.noNightDows = []; if (!w.noNightPos) w.noNightPos = []; });
         if (!this.data.markers || !this.data.markers.length) this.seedMarkers();
@@ -850,6 +922,13 @@ const App = {
             if (m.reqPubHol === undefined) m.reqPubHol = !!m.reqHoliday;
             // "ครึ่งวัน" (light) — smc เป็นเวรเบาโดยปริยาย (ใช้กับกติกาพักเสาร์-อาทิตย์)
             if (m.light === undefined) m.light = (m.text || '').trim().toLowerCase() === 'smc';
+            // ราคาเดี่ยว (price) → prices { posId: { weekday } } แยกกลุ่มงาน + ชนิดวัน
+            if (m.price != null && !m.prices) { m.prices = {}; (m.positions || all).forEach(pid => { m.prices[pid] = { weekday: m.price }; }); }
+            delete m.price;
+        });
+        (this.data.boMarkers || []).forEach(m => {
+            if (m.price != null && !m.prices) { m.prices = {}; all.forEach(pid => { m.prices[pid] = { weekday: m.price }; }); }
+            delete m.price;
         });
     }
 };
