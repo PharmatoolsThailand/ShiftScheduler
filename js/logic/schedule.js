@@ -99,9 +99,11 @@ const Schedule = {
             return !sp || App.splitPosFor(sp, ymKey, day) === posId;
         });
         if (!required.length) return null;
+        // เทียบด้วย "ข้อความ" ไม่ใช่ id — ช สี่เหลี่ยม/วงกลม/ขีดเส้นใต้ (deco ต่างกัน แต่ text 'ช') ถือว่าครบเวร ช เหมือนกัน
+        const norm = m => (m && m.text || '').trim();
         const present = new Set();
-        this.activeStaffForPos(posId).forEach(s => App.getCell(s.id, day).forEach(id => present.add(id)));
-        return required.filter(m => !present.has(m.id));
+        this.activeStaffForPos(posId).forEach(s => App.getCell(s.id, day).forEach(id => present.add(norm(App.getMarker(id)))));
+        return required.filter(m => !present.has(norm(m)));
     },
 
     // marker ids used by 2+ staff (same position) on one day → duplicate shift
