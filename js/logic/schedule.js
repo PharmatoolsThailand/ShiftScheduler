@@ -99,10 +99,14 @@ const Schedule = {
             return !sp || App.splitPosFor(sp, ymKey, day) === posId;
         });
         if (!required.length) return null;
-        // เทียบด้วย id — แต่ละ deco (บ, บ สี่เหลี่ยม, ช วงกลม...) เป็นเวรบังคับคนละตัว ไม่นับแทนกัน
-        const present = new Set();
-        this.activeStaffForPos(posId).forEach(s => App.getCell(s.id, day).forEach(id => present.add(id)));
-        return required.filter(m => !present.has(m.id));
+        // มีเวรนี้ไหม (เทียบด้วย id — deco ต่างกันคือคนละเวร) · เวรแชร์ครึ่งเดือน (split) นับว่ามี ถ้าคนใน
+        // "ตำแหน่งใดก็ได้ที่แชร์เวรกัน" ลงไว้ — หลังเผยแพร่ 2 กลุ่มแลกเวรข้ามกันได้ ฝั่งที่ขายไปไม่ควรขึ้นว่าขาด
+        const has = m => {
+            const sp = App.splitForMarker(m.id);
+            const pids = sp ? [sp.posFirst, sp.posSecond] : [posId];
+            return pids.some(pid => this.activeStaffForPos(pid).some(s => App.getCell(s.id, day).includes(m.id)));
+        };
+        return required.filter(m => !has(m));
     },
 
     // marker ids used by 2+ staff (same position) on one day → duplicate shift
