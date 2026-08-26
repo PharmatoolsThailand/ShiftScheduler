@@ -234,7 +234,7 @@ const Auth = {
     async pushSwap(staffId) {
         if (!this.validUrl()) return;
         const ym = App.currentKey();
-        const cells = (App.data.schedules[ym] && App.data.schedules[ym][staffId]) || {};
+        const cells = (App.data.staffBoard && App.data.staffBoard[ym] && App.data.staffBoard[ym][staffId]) || {};
         const st = App.data.staff.find(s => s.id === staffId);
         const json = await this.postJson({ action: 'swap', ym, staffId, cells, byName: st ? st.name : '' });
         if (json.ok && json.swapLog) {

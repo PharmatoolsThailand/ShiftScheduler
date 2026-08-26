@@ -519,25 +519,32 @@ const App = {
         return this.getCellIn(this.currentKey(), staffId, day);
     },
 
-    // MANUAL edit (current month): shared cell (pin / เลือกเวรเอง) → base · otherwise → this draft's store
-    // (ต้องใช้ sharedCell เดียวกับ getCellIn ไม่งั้น pickOwn จะเขียนลงร่างแต่อ่านจาก base = เวรหาย)
+    // ตารางบุคลากร (staff) เก็บแยกจากร่าง admin — data.schedules ไม่ถูก staff แตะเด็ดขาด (กันตารางแลกทับร่าง)
+    staffBoardRoot() { return this.data.staffBoard || (this.data.staffBoard = {}); },
+
+    // MANUAL edit (current month): staff → staffBoard · admin: shared cell (pin/เลือกเวรเอง) → base · อื่น → draft store
     setCell(staffId, day, ids) {
         const key = this.currentKey();
+        if (this.isStaff()) { this.setCellIn(key, staffId, day, ids); return; }
         if (this.sharedCell(key, staffId, day)) this.setCellBase(key, staffId, day, ids);
         else this.setCellIn(key, staffId, day, ids);
     },
 
-    // read a cell (overlay): shared pin/pickOwn from base, otherwise this staff's-position active draft store
+    // read a cell: staff → staffBoard[ymKey] · admin → schedules (shared pin/pickOwn จาก base, อื่น = draft store ของตำแหน่ง)
     getCellIn(ymKey, staffId, day) {
-        let store = ymKey;   // fast path: no draft active anywhere → base only (hot path during สุ่ม)
-        if (this.anyDraftActive() && !this.sharedCell(ymKey, staffId, day)) store = this.staffDraftKey(ymKey, staffId);
-        const m = this.data.schedules[store];
+        let root, store;
+        if (this.isStaff()) { root = this.staffBoardRoot(); store = ymKey; }
+        else {
+            root = this.data.schedules; store = ymKey;   // fast path: ไม่มีร่าง active → base (hot path ตอนสุ่ม)
+            if (this.anyDraftActive() && !this.sharedCell(ymKey, staffId, day)) store = this.staffDraftKey(ymKey, staffId);
+        }
+        const m = root[store];
         const v = m && m[staffId] && m[staffId][day];
         if (Array.isArray(v)) return v.slice();
         return v ? [v] : [];
     },
 
-    // MANUAL write to base store (shared across drafts) — for pins incl. cross-month night pairs
+    // MANUAL write to base store (shared across drafts) — for pins incl. cross-month night pairs (admin เท่านั้น)
     setCellBase(ymKey, staffId, day, ids) {
         if (!this.data.schedules[ymKey]) this.data.schedules[ymKey] = {};
         const m = this.data.schedules[ymKey];
@@ -547,11 +554,12 @@ const App = {
         this.save();
     },
 
-    // RANDOMIZER / draft write → the store of THIS staff's-position active draft (ร่าง 2/3 แยกกัน · ร่าง 1 = base)
+    // RANDOMIZER/draft write · staff แลกเวร → staffBoard[ymKey] · admin → draft store ของตำแหน่ง (ร่าง 2/3 แยก · ร่าง 1 = base)
     setCellIn(ymKey, staffId, day, ids) {
-        const store = this.staffDraftKey(ymKey, staffId);
-        if (!this.data.schedules[store]) this.data.schedules[store] = {};
-        const m = this.data.schedules[store];
+        const root = this.isStaff() ? this.staffBoardRoot() : this.data.schedules;
+        const store = this.isStaff() ? ymKey : this.staffDraftKey(ymKey, staffId);
+        if (!root[store]) root[store] = {};
+        const m = root[store];
         if (!m[staffId]) m[staffId] = {};
         if (ids && ids.length) m[staffId][day] = ids.slice(0, this.MAX_CELL);
         else delete m[staffId][day];
@@ -864,14 +872,15 @@ const App = {
         this.save();
     },
 
-    // staff: "ตารางบุคลากร" = ตารางที่เผยแพร่ (publishedSchedules) + การแลก (overlay) — แยกจากร่าง 1-3 ของ admin
-    // admin: ไม่แตะร่าง → เห็นร่าง 1-3 ตามที่จัด · แต่เก็บ swapOverlay ไว้ (ให้ตัวสุ่มอ่านเวรบ่ายวันสุดท้ายเดือนก่อนจากตารางที่แลกแล้ว)
+    // staff: สร้าง "ตารางบุคลากร" ลง data.staffBoard (แยกจาก data.schedules = ร่าง admin) = publishedSchedules + การแลก (overlay)
+    // admin: ไม่แตะทั้ง schedules(ร่าง) และ staffBoard → เห็นร่าง 1-3 · เก็บ swapOverlay ไว้ให้ตัวสุ่มอ่านเวรบ่ายวันสุดท้ายเดือนก่อน
     applySwapOverlay() {
         if (!this.isStaff()) return;
         const pub = this.data.publishedSchedules || {}, ov = this.data.swapOverlay || {};
-        Object.keys(pub).forEach(ym => { this.data.schedules[ym] = JSON.parse(JSON.stringify(pub[ym] || {})); });   // เริ่มจากสำเนาตารางเผยแพร่
+        const board = this.data.staffBoard = {};   // สร้างใหม่ทุกครั้งจากต้นฉบับที่เผยแพร่ + การแลกล่าสุด
+        Object.keys(pub).forEach(ym => { board[ym] = JSON.parse(JSON.stringify(pub[ym] || {})); });
         Object.keys(ov).forEach(ym => {
-            const store = this.data.schedules[ym] = this.data.schedules[ym] || {};
+            const store = board[ym] = board[ym] || {};
             Object.keys(ov[ym]).forEach(sid => {
                 const cells = ov[ym][sid];
                 if (cells && Object.keys(cells).length) store[sid] = cells; else delete store[sid];
@@ -890,6 +899,7 @@ const App = {
         if (!this.data.positions || !this.data.positions.length) this.seedPositions();
         if (!this.data.boMarkers) this.data.boMarkers = [];
         if (!this.data.backoffice) this.data.backoffice = {};
+        if (!this.data.staffBoard) this.data.staffBoard = {};   // ตารางบุคลากร (staff) แยกจากร่าง admin
         if (!this.data.workplaces) this.seedWorkplaces();
         this.data.workplaces.forEach(w => { if (!w.noNightDows) w.noNightDows = []; if (!w.noNightPos) w.noNightPos = []; });
         if (!this.data.markers || !this.data.markers.length) this.seedMarkers();
