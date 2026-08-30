@@ -175,7 +175,7 @@ const Auth = {
         UI.render();
         const st = UI.el('publishStatus');
         if (st) { st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'publish', data: App.data, swapReset: { ym, staffIds } });
+        const json = await this.postJson({ action: 'publish', data: this.pushBlob(), swapReset: { ym, staffIds } });
         if (st) {
             if (json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
             else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + json.error; st.className = 'publish-status err'; }
@@ -196,10 +196,21 @@ const Auth = {
         UI.render();
         const st = UI.el('publishStatus');
         if (st) { st.textContent = 'กำลังยกเลิกเผยแพร่...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'publish', data: App.data });   // regen readable sheets (กลุ่มนี้ถูกเคลียร์)
+        const json = await this.postJson({ action: 'publish', data: this.pushBlob() });   // regen readable sheets (กลุ่มนี้ถูกเคลียร์)
         if (json.ok) this.setSyncStatus(`ยกเลิกเผยแพร่ "${p.name}" แล้ว ✓`, 'ok');
         else this.setSyncStatus('ไม่สำเร็จ: ' + json.error, 'err');
         this.renderPublishStatus();
+    },
+
+    // payload ส่งขึ้น Sheet — ตัด field หนักที่ backend ไม่ได้ใช้/สร้างใหม่เอง กัน POST ใหญ่จน "Failed to fetch"
+    //   swapLog (~80% ของ blob) → backend ใช้ของเดิมใน A1 + ชีต SWAPLOG เสมอ (ที่ส่งไปถูกทิ้ง)
+    //   swapOverlay/staffBoard → สร้างสดจากชีต SWAPS / เป็น cache ฝั่ง client
+    pushBlob() {
+        const c = Object.assign({}, App.data);
+        delete c.swapLog;
+        c.swapOverlay = null;
+        c.staffBoard = null;
+        return c;
     },
 
     // ---- manual save (admin): back up ALL working data (staff/ตั้งค่า/วันลา/ตาราง) to the Sheet
@@ -210,7 +221,7 @@ const Auth = {
         App.save();
         const st = UI.el('publishStatus');
         if (st) { st.textContent = '💾 กำลังบันทึก...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'saveData', data: App.data });
+        const json = await this.postJson({ action: 'saveData', data: this.pushBlob() });
         if (json.ok) this.setSyncStatus(`บันทึกแล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
         else this.setSyncStatus('บันทึกไม่สำเร็จ: ' + json.error, 'err');
     },
