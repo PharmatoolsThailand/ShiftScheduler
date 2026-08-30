@@ -57,7 +57,6 @@
         <!-- Tab navigation -->
         <nav class="tab-nav no-print">
             <button class="tab-btn active" data-tab="schedule" type="button">🗓️ ตารางเวร</button>
-            <button class="tab-btn" data-tab="swaps" type="button">🔁 ประวัติแลกเวร</button>
             <button class="tab-btn admin-only" data-tab="staff" type="button">👥 บุคลากร</button>
             <button class="tab-btn admin-only" data-tab="leave" type="button">🏖️ วันลา</button>
             <button class="tab-btn admin-only" data-tab="markers" type="button">⚙️ ตั้งค่าเวร</button>
@@ -66,17 +65,6 @@
         <!-- Tab: Schedule -->
         <section class="tab-panel active" data-panel="schedule">
             <div id="scheduleContainer"></div>
-        </section>
-
-        <!-- Tab: Swap history -->
-        <section class="tab-panel no-print" data-panel="swaps">
-            <div class="content-box">
-                <div class="table-title">
-                    <h2>🔁 ประวัติแลกเวร <span id="swapMonthLabel" class="pos-sub"></span></h2>
-                    <span id="swapCount" class="table-hint"></span>
-                </div>
-                <div id="swapHistoryList" class="swap-history"></div>
-            </div>
         </section>
 
         <!-- Tab: Staff -->

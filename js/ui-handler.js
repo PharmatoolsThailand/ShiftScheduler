@@ -49,33 +49,6 @@ const UI = {
         this.renderHolidayManager();
         this.renderBoMarkerSettings();
         this.renderPriceZone();
-        this.renderSwapHistory();
-    },
-
-    // ---- Swap history tab (staff shift-swaps, per month) ----
-    renderSwapHistory() {
-        const wrap = this.el('swapHistoryList');
-        if (!wrap) return;
-        const ym = App.currentKey();
-        const log = (App.data.swapLog && App.data.swapLog[ym]) || [];
-        const lbl = this.el('swapMonthLabel'); if (lbl) lbl.textContent = '· ' + this.monthTitle();
-        const cnt = this.el('swapCount'); if (cnt) cnt.textContent = log.length ? `รวม ${log.length} ครั้ง` : '';
-        if (!log.length) {
-            wrap.innerHTML = '<div class="muted-note" style="padding:12px">ยังไม่มีการแลกเวรในเดือนนี้</div>';
-            return;
-        }
-        const txt = ids => (ids && ids.length)
-            ? ids.map(id => { const m = App.getMarker(id); return m ? this.esc(m.text) : '?'; }).join(' ')
-            : '<span class="swap-empty">ว่าง</span>';
-        wrap.innerHTML = log.slice().sort((a, b) => (b.at || '').localeCompare(a.at || '')).map(e => {
-            let when = e.at || '';
-            try { when = new Date(e.at).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch (x) { /* keep raw */ }
-            return `<div class="swap-row">
-                <span class="swap-when">${this.esc(when)}</span>
-                <span class="swap-who">${this.esc(e.byName || '?')}</span>
-                <span class="swap-change">วันที่ ${e.day}: <b>${txt(e.before)}</b> <span class="swap-arrow">→</span> <b>${txt(e.after)}</b></span>
-            </div>`;
-        }).join('');
     },
 
     // ---- Schedule tab: toggle [ตารางเวร | ลงเวร Back Office] then blocks per position ----

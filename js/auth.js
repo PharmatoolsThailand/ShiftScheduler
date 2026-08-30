@@ -175,7 +175,9 @@ const Auth = {
         UI.render();
         const st = UI.el('publishStatus');
         if (st) { st.textContent = 'กำลังเผยแพร่...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'publish', data: this.pushBlob(), swapReset: { ym, staffIds } });
+        const body = this.saveBody('publish'); body.swapReset = { ym, staffIds };
+        const json = await this.postJson(body);
+        if (json.ok) App.setBaseline();
         if (st) {
             if (json.ok) { st.textContent = `เผยแพร่แล้ว ✓ ${App.data.publishedAt}`; st.className = 'publish-status ok'; }
             else { st.textContent = 'เผยแพร่ไม่สำเร็จ: ' + json.error; st.className = 'publish-status err'; }
@@ -196,21 +198,26 @@ const Auth = {
         UI.render();
         const st = UI.el('publishStatus');
         if (st) { st.textContent = 'กำลังยกเลิกเผยแพร่...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'publish', data: this.pushBlob() });   // regen readable sheets (กลุ่มนี้ถูกเคลียร์)
+        const json = await this.postJson(this.saveBody('publish'));   // meta (publishedPos) เปลี่ยน → เซฟเฉพาะส่วนที่แก้
+        if (json.ok) App.setBaseline();
         if (json.ok) this.setSyncStatus(`ยกเลิกเผยแพร่ "${p.name}" แล้ว ✓`, 'ok');
         else this.setSyncStatus('ไม่สำเร็จ: ' + json.error, 'err');
         this.renderPublishStatus();
     },
 
-    // payload ส่งขึ้น Sheet — ตัด field หนักที่ backend ไม่ได้ใช้/สร้างใหม่เอง กัน POST ใหญ่จน "Failed to fetch"
-    //   swapLog (~80% ของ blob) → backend ใช้ของเดิมใน A1 + ชีต SWAPLOG เสมอ (ที่ส่งไปถูกทิ้ง)
-    //   swapOverlay/staffBoard → สร้างสดจากชีต SWAPS / เป็น cache ฝั่ง client
+    // payload ทั้งชุด (ครั้งแรก/ยังไม่มี baseline) — ตัด field ที่ backend ไม่ได้ใช้ (swapLog/swapOverlay/staffBoard)
     pushBlob() {
         const c = Object.assign({}, App.data);
         delete c.swapLog;
         c.swapOverlay = null;
         c.staffBoard = null;
         return c;
+    },
+    // body บันทึก — มี baseline: ส่งเฉพาะหมวด/คนที่แก้ (partial ลด token) · ไม่มี: ส่งทั้งชุด (backend จะ migrate เป็นแยกหมวดให้)
+    saveBody(action) {
+        if (!App.hasBaseline()) return { action, data: this.pushBlob() };
+        const diff = App.dirtyPush();
+        return { action, sections: diff.sections, staff: diff.staff };
     },
 
     // ---- manual save (admin): back up ALL working data (staff/ตั้งค่า/วันลา/ตาราง) to the Sheet
@@ -219,10 +226,14 @@ const Auth = {
         if (!App.isAdmin()) return;
         if (!this.validUrl()) { alert('ตั้งค่าลิงก์ Google Sheet ก่อน (แท็บ ⚙️ ตั้งค่าเวร)'); return; }
         App.save();
+        if (App.hasBaseline()) {   // ไม่มีอะไรเปลี่ยน → ไม่ต้องยิง (ประหยัด)
+            const diff = App.dirtyPush();
+            if (!Object.keys(diff.sections).length && !diff.staff) { this.setSyncStatus('บันทึกแล้ว (ไม่มีการเปลี่ยนแปลง) ✓', 'ok'); return; }
+        }
         const st = UI.el('publishStatus');
         if (st) { st.textContent = '💾 กำลังบันทึก...'; st.className = 'publish-status'; }
-        const json = await this.postJson({ action: 'saveData', data: this.pushBlob() });
-        if (json.ok) this.setSyncStatus(`บันทึกแล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok');
+        const json = await this.postJson(this.saveBody('saveData'));
+        if (json.ok) { App.setBaseline(); this.setSyncStatus(`บันทึกแล้ว ✓ ${new Date().toLocaleTimeString('th-TH')}`, 'ok'); }
         else this.setSyncStatus('บันทึกไม่สำเร็จ: ' + json.error, 'err');
     },
     saveGroup() { return this.pushSave(); },   // per-position 💾 saves the whole working blob (atomic)
@@ -248,12 +259,6 @@ const Auth = {
         const cells = (App.data.staffBoard && App.data.staffBoard[ym] && App.data.staffBoard[ym][staffId]) || {};
         const st = App.data.staff.find(s => s.id === staffId);
         const json = await this.postJson({ action: 'swap', ym, staffId, cells, byName: st ? st.name : '' });
-        if (json.ok && json.swapLog) {
-            if (!App.data.swapLog) App.data.swapLog = {};
-            App.data.swapLog[ym] = json.swapLog;   // authoritative log (server timestamp + name) → show immediately
-            App.save();
-            UI.renderSwapHistory();
-        }
         if (json.ok) { this._unsavedSwap = false; UI.setSwapStatus('บันทึกการแลกเวรแล้ว ✓', 'ok'); }
         else UI.setSwapStatus('บันทึกไม่สำเร็จ: ' + json.error + ' — กดบันทึกอีกครั้ง', 'err');
     },

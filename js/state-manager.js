@@ -869,7 +869,42 @@ const App = {
         this.data.activeDraft = (ad && typeof ad === 'object') ? ad : {};
         this._postLoad();
         this.applySwapOverlay();   // staff → สร้างตารางบุคลากร (เผยแพร่+แลก) · admin → คงร่าง 1-3
+        this.setBaseline();        // จำสถานะที่โหลดมา → บันทึกครั้งหน้าเทียบ diff ส่งเฉพาะส่วนที่แก้
         this.save();
+    },
+
+    // ---- แยกหมวดเก็บ backend + บันทึกเฉพาะส่วนที่แก้ (ลด token) — SECTION_FIELDS ต้องตรงกับ apps-script ----
+    SECTION_FIELDS: {
+        meta: ['year', 'month', 'published', 'publishedAt', 'publishedPos', 'splitFlip', 'activeDraft', 'adminPass', 'unit', 'sheetUrl', 'autoSync'],
+        settings: ['markers', 'positions', 'workplaces', 'splits', 'boMarkers', 'customHolidays'],
+        schedules: ['schedules'],
+        pubsched: ['publishedSchedules'],
+        leaves: ['leaves', 'leaveOrder'],
+        locks: ['locks'],
+        backoffice: ['backoffice']
+    },
+    sectionValue(sec) {
+        const o = {}; (this.SECTION_FIELDS[sec] || []).forEach(f => { if (this.data[f] !== undefined) o[f] = this.data[f]; }); return o;
+    },
+    setBaseline() {
+        const s = {}; Object.keys(this.SECTION_FIELDS).forEach(sec => { s[sec] = JSON.stringify(this.sectionValue(sec)); });
+        const st = {}; (this.data.staff || []).forEach(p => { st[p.id] = JSON.stringify(p); });
+        this._baseline = { sections: s, staff: st };
+    },
+    hasBaseline() { return !!this._baseline; },
+    // diff เทียบ baseline → { sections:{หมวดที่แก้}, staff:{upsert,remove}|null }
+    dirtyPush() {
+        const b = this._baseline || { sections: {}, staff: {} };
+        const sections = {};
+        Object.keys(this.SECTION_FIELDS).forEach(sec => {
+            const cur = JSON.stringify(this.sectionValue(sec));
+            if (cur !== b.sections[sec]) sections[sec] = this.sectionValue(sec);
+        });
+        const curStaff = {}; (this.data.staff || []).forEach(p => { curStaff[p.id] = JSON.stringify(p); });
+        const upsert = [], remove = [];
+        (this.data.staff || []).forEach(p => { if (curStaff[p.id] !== b.staff[p.id]) upsert.push(p); });
+        Object.keys(b.staff).forEach(id => { if (!(id in curStaff)) remove.push(id); });
+        return { sections, staff: (upsert.length || remove.length) ? { upsert, remove } : null };
     },
 
     // staff: สร้าง "ตารางบุคลากร" ลง data.staffBoard (แยกจาก data.schedules = ร่าง admin) = publishedSchedules + การแลก (overlay)
